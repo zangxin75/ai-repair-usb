@@ -1,0 +1,14 @@
+[Desktop Entry]
+# fcitx5.desktop —— 输入法框架自启动（P2-L4）
+# Xfce 会话启动时拉起 fcitx5（环境变量 GTK_IM_MODULE 等由 hook 0400 写入 /etc/environment）
+Type=Application
+Name=Fcitx 5
+Name[zh_CN]=Fcitx 5 输入法
+GenericName=Input Method
+GenericName[zh_CN]=输入法
+Comment=Start Input Method
+Comment[zh_CN]=启动输入法框架
+Exec=fcitx5
+Icon=fcitx
+Terminal=false
+X-GNOME-Autostart-enabled=true

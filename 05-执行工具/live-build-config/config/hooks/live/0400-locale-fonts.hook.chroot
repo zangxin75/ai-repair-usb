@@ -1,0 +1,38 @@
+#!/bin/bash
+# 0400-locale-fonts.hook.chroot —— 中文 locale / 终端字体 / fcitx5 环境变量（P2-L4）
+#
+# 本 hook 负责：
+#   ① zh_CN.UTF-8 设为系统默认 locale（locale.gen + /etc/default/locale；
+#      与 auto/config 的 bootappend locales=zh_CN.UTF-8 双保险）
+#   ② xfce4-terminal 默认字体 Noto Sans Mono CJK SC（写 skel 模板，live 用户首次登录生效）
+#   ③ fcitx5 输入法环境变量 GTK_IM_MODULE / QT_IM_MODULE / XMODIFIERS
+#      （/etc/environment 经 PAM 对所有会话生效 + /etc/profile.d 兜底）
+set -euo pipefail
+
+# ① 默认 locale zh_CN.UTF-8
+sed -i 's/^# *\(zh_CN.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen
+echo 'LANG=zh_CN.UTF-8' > /etc/default/locale
+
+# ② xfce4-terminal 默认字体（skel → live 用户家目录）
+mkdir -p /etc/skel/.config/xfce4/terminal
+cat > /etc/skel/.config/xfce4/terminal/terminalrc <<'EOF'
+[Configuration]
+FontName=Noto Sans Mono CJK SC 12
+EOF
+
+# ③ fcitx5 环境变量
+cat >> /etc/environment <<'EOF'
+GTK_IM_MODULE=fcitx
+QT_IM_MODULE=fcitx
+XMODIFIERS=@im=fcitx
+EOF
+
+cat > /etc/profile.d/fcitx5.sh <<'EOF'
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
+EOF
+chmod 644 /etc/profile.d/fcitx5.sh
+
+echo "[0400] 中文环境配置完成：locale=zh_CN.UTF-8，终端字体=Noto Sans Mono CJK SC，fcitx5 环境变量已写入"

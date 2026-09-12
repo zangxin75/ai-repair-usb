@@ -1,0 +1,92 @@
+# main.list.chroot —— AI 维修 Live 系统 apt 包清单（P2-L2a）
+#
+# 说明：
+#   - 包名均为 Debian 12 bookworm 真实存在（已按 critic 修正：wimtools / gddrescue / p7zip-full 等）
+#   - firmware-* 系列在 bookworm 位于 non-free-firmware 区（auto/config 已开 archive-areas）
+#   - 每包一行注释说明用途
+
+# ===== 桌面与终端 =====
+# Xfce 精简桌面环境（维修系统图形界面基座）
+xfce4
+# 中文兼容终端（Claude Code TUI 宿主，P0.5 已验证组合）
+xfce4-terminal
+# 显示管理器：live 用户自动登录（hook 0300 配置 autologin）
+lightdm
+
+# ===== 中文环境 =====
+# fcitx5 输入法框架（daemon 本体）
+fcitx5
+# 拼音等中文输入引擎（fcitx5 插件）
+fcitx5-chinese-addons
+# Noto CJK 中文字体（显示 + 终端等宽渲染）
+fonts-noto-cjk
+
+# ===== Claude Code 运行依赖 =====
+# Claude Code 功能依赖（版本控制）
+git
+# 网络连通性/网关探测（check-network.sh、update-claude.sh）
+curl
+# JSON 解析（脚本读 manifest/settings.json）
+jq
+# 数据备份增量同步（backup-user-data.sh）
+rsync
+# 中文图形化菜单（主菜单/离线菜单；Debian 包名 whiptail，源自 newt）
+whiptail
+
+# ===== 网络（最高优先级，设计 §2.2.1） =====
+# 网卡管理 + nmtui 中文配网界面
+network-manager
+# WPA 无线认证（WiFi 联网）
+wpasupplicant
+# iPhone 个人热点支持守护进程（ipheth 为内核模块，随内核自带，无需装包）
+usbmuxd
+
+# ===== 硬件诊断（设计 §2.2.2） =====
+# 硬盘 SMART 检测（smartctl）
+smartmontools
+# 温度/电压/风扇传感（sensors）
+lm-sensors
+# 硬件信息汇总（lshw）
+lshw
+# PCI 设备枚举（lspci）
+pciutils
+# USB 设备枚举（lsusb）
+usbutils
+
+# ===== 磁盘工具 =====
+# 分区操作 CLI（装机分区流程）
+parted
+# 图形化分区工具（人工干预场景）
+gparted
+# 分区恢复 + 文件恢复（testdisk 包内同时含 photorec）
+testdisk
+# 坏道数据救援（Debian 12 包名 gddrescue，提供 ddrescue 命令）
+gddrescue
+# NTFS 读写挂载
+ntfs-3g
+# exFAT 挂载/fsck（Ventoy 数据分区；替代已废弃的 exfat-utils）
+exfatprogs
+# BitLocker/设备加密分区解锁（需用户提供恢复密钥）
+dislocker
+# Windows SAM 离线密码重置
+chntpw
+# 提供 wimlib-imagex（Windows install.wim 无人值守灌装；Debian 12 无 wimlib 包名，包名是 wimtools）
+wimtools
+# EFI 启动项管理（备选纯 Linux 引导方案）
+efibootmgr
+# 7z 解压（Debian 12 包名 p7zip-full，提供 7z 命令）
+p7zip-full
+
+# ===== 网卡固件（设计 §2.2.1-A 全覆盖） =====
+# 非自由固件合集
+firmware-linux-nonfree
+# Realtek 有线/无线固件（维修场景最常见）
+firmware-realtek
+# Intel 无线固件
+firmware-iwlwifi
+# Atheros 无线固件
+firmware-atheros
+# Broadcom 无线固件
+firmware-brcm80211
+# MediaTek 无线固件
+firmware-mediatek

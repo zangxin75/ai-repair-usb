@@ -1,0 +1,67 @@
+{
+  "_comment": "AI 电脑维修 U盘 一键制作器 · 组件清单模板（manifest.json）。本文件由发布流程自动生成并填充真实值；当前为模板，所有 url/sha256/sizeBytes 为占位符，发布流水线（P8）在每次组件发布时重写本文件并签名归档。安装器启动时总是拉取最新 manifest —— 组件升级 = 改本文件，无需改安装器（§2.5.4）。托管位置: 独立 CDN 域名（与 API 网关 tokeneff.com 不同域，故障隔离）。",
+  "version": "1.0.0",
+  "generated": "2026-09-12T00:00:00+08:00",
+  "components": [
+    {
+      "name": "ventoy",
+      "filename": "ventoy-x.y.z-windows.zip / ventoy-x.y.z-linux.tar.gz",
+      "url": "https://cdn.example.com/ai-repair-usb/ventoy/REPLACE_BY_RELEASE.zip",
+      "sizeBytes": 0,
+      "sha256": "REPLACE_BY_RELEASE_PIPELINE",
+      "required": true,
+      "notes": "Ventoy 官方发行包（Windows 端为 zip，Linux 端为 tar.gz；发布流程按端拆分或提供两个组件条目）。来源: https://www.ventoy.net"
+    },
+    {
+      "name": "ai-repair-live",
+      "filename": "AI-Repair-Live-v1.0-YYYYMMDD.iso",
+      "url": "https://cdn.example.com/ai-repair-usb/live/REPLACE_BY_RELEASE.iso",
+      "sizeBytes": 0,
+      "sha256": "REPLACE_BY_RELEASE_PIPELINE",
+      "required": true,
+      "notes": "本项目自产定制 Debian 12 Live 维修系统（P2 live-build 产物），默认启动项。产物命名规范见 make-usb.sh。"
+    },
+    {
+      "name": "winpe",
+      "filename": "WinPE_x64.iso",
+      "url": "https://cdn.example.com/ai-repair-usb/winpe/REPLACE_BY_RELEASE.iso",
+      "sizeBytes": 0,
+      "sha256": "REPLACE_BY_RELEASE_PIPELINE",
+      "required": true,
+      "notes": "本项目自产 WinPE（P4.5：Windows ADK 构建 + boot.wim 注入 RST/VMD 与网卡驱动）。"
+    },
+    {
+      "name": "memtest86+",
+      "filename": "MemTest86+.iso",
+      "url": "https://cdn.example.com/ai-repair-usb/memtest/REPLACE_BY_RELEASE.iso",
+      "sizeBytes": 0,
+      "sha256": "REPLACE_BY_RELEASE_PIPELINE",
+      "required": true,
+      "notes": "开源内存检测工具。来源: https://www.memtest.org"
+    },
+    {
+      "name": "win10",
+      "filename": "Win10_22H2_Chinese_x64.iso",
+      "url": "",
+      "sizeBytes": 0,
+      "sha256": "REPLACE_BY_RELEASE_PIPELINE (发布流程每次填微软当期 ISO 的官方 SHA256，用于下载后校验)",
+      "required": false,
+      "source": "microsoft-fido",
+      "sourceUrl": "https://www.microsoft.com/zh-cn/software-download/windows10",
+      "editionKeyword": "Windows 10",
+      "notes": "不从本 CDN 分发（合规：本项目不分发微软任何字节）。安装器运行时按 Fido 思路动态解析微软官方授权直链，文件始终从微软服务器下载。解析失败时用户可手动从微软官网下载拷入 U盘 ISO 目录。"
+    },
+    {
+      "name": "win11",
+      "filename": "Win11_24H2_Chinese_x64.iso",
+      "url": "",
+      "sizeBytes": 0,
+      "sha256": "REPLACE_BY_RELEASE_PIPELINE",
+      "required": false,
+      "source": "microsoft-fido",
+      "sourceUrl": "https://www.microsoft.com/zh-cn/software-download/windows11",
+      "editionKeyword": "Windows 11",
+      "notes": "同 win10：Fido 式动态解析 + 微软服务器直链下载。Linux 安装器不处理本组件（§2.5.2）。"
+    }
+  ]
+}

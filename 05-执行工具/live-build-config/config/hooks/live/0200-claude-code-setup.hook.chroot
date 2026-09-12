@@ -1,0 +1,30 @@
+#!/bin/bash
+# 0200-claude-code-setup.hook.chroot —— Claude Code 离线安装固化（P2-L2b）
+#
+# 前提：claude-code 已由 build.sh 在构建机联网 npm install 后整体拷入 /opt/claude-code
+#       （含 node_modules + package-lock.json 锁版本，见 includes.chroot/opt/claude-code/README.md）
+# 本 hook 负责：
+#   ① /usr/local/bin/claude 软链
+#   ② 构建期验证 claude --version 可跑（--version 不触网）
+#   ③ 固化版本号到 /etc/ai-repair-version（供 welcome.sh / update-claude.sh 回退判断与说明书引用）
+set -euo pipefail
+
+CLAUDE_HOME=/opt/claude-code
+CLAUDE_BIN="$CLAUDE_HOME/node_modules/.bin/claude"
+
+# 前置断言：npm 产物必须已被 build.sh 填充
+if [[ ! -e "$CLAUDE_BIN" ]]; then
+    echo "[0200] 错误：$CLAUDE_BIN 不存在，请检查 build.sh 的 claude-code 依赖下载步骤" >&2
+    exit 1
+fi
+
+# ① 命令软链
+ln -sf "$CLAUDE_BIN" /usr/local/bin/claude
+
+# ② 构建期验证（用 /opt/node 的 node 执行，不依赖 PATH 注入时序）
+CLAUDE_VERSION="$(/opt/node/bin/node "$CLAUDE_BIN" --version | head -n1)"
+[[ -n "$CLAUDE_VERSION" ]]
+
+# ③ 固化版本号
+printf 'claude-code %s\n' "$CLAUDE_VERSION" > /etc/ai-repair-version
+echo "[0200] claude-code 固化完成：$CLAUDE_VERSION → /etc/ai-repair-version"

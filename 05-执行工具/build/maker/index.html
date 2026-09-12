@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 电脑维修 U盘 · 一键制作</title>
+<!-- 创建日期: 2026-09-12 | 版本: 1.0.0 | 状态: 草稿（SHA256 与变更日志由发布流程填充） -->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    background: #f5f6f8; color: #222; line-height: 1.8; padding: 16px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.6em; text-align: center; margin: 16px 0 4px; }
+  .sub { text-align: center; color: #666; font-size: .95em; margin-bottom: 16px; }
+  .alert {
+    background: #fdecea; border: 2px solid #e53935; color: #b71c1c;
+    border-radius: 10px; padding: 16px; font-size: 1.1em; font-weight: bold;
+    text-align: center; margin-bottom: 20px;
+  }
+  .card {
+    background: #fff; border-radius: 10px; padding: 18px;
+    margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+  .card h2 { font-size: 1.15em; margin-bottom: 8px; }
+  .cmdbox {
+    display: flex; gap: 8px; align-items: stretch; margin: 10px 0;
+    flex-wrap: wrap;
+  }
+  .cmd {
+    flex: 1; min-width: 220px; background: #1e1e1e; color: #9fe870;
+    font-family: Consolas, "Courier New", monospace; font-size: .9em;
+    padding: 12px; border-radius: 8px; word-break: break-all; user-select: all;
+  }
+  button.copy {
+    background: #1976d2; color: #fff; border: none; border-radius: 8px;
+    padding: 0 18px; font-size: 1em; cursor: pointer; min-height: 44px;
+  }
+  button.copy:hover { background: #1565c0; }
+  button.copy.done { background: #2e7d32; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: #1976d2; font-weight: bold; }
+  ol.steps { padding-left: 22px; margin-top: 8px; }
+  .faq h3 { font-size: 1em; margin-top: 12px; }
+  .faq p { color: #444; font-size: .95em; }
+  .meta { font-size: .85em; color: #777; }
+  code { background: #eee; padding: 1px 5px; border-radius: 4px; }
+  footer { text-align: center; color: #999; font-size: .8em; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>AI 电脑维修 U盘 · 一键制作</h1>
+  <p class="sub">插上 U盘，复制一条命令，全自动完成制作。全程中文提示。</p>
+
+  <div class="alert">
+    ⚠️ 制作将清空 U盘全部数据，请先备份！<br>
+    请使用容量 ≥64GB（推荐 128GB）的 U盘。
+  </div>
+
+  <div class="card">
+    <h2>第一步：把 U盘 插到这台电脑上</h2>
+    <p>确认 U盘 里没有重要文件（制作过程会清空它）。</p>
+  </div>
+
+  <div class="card">
+    <h2>第二步：根据你的电脑系统，复制对应命令</h2>
+
+    <h3 style="margin-top:6px;">🪟 Windows 用户</h3>
+    <p class="meta">按 <code>Win + X</code> → 选「终端」或「Windows PowerShell」，粘贴下面的命令后回车：</p>
+    <div class="cmdbox">
+      <div class="cmd" id="cmd-win">irm https://tokeneff.com/usb-v1.0.ps1 | iex</div>
+      <button class="copy" data-target="cmd-win">一键复制</button>
+    </div>
+    <details>
+      <summary>不放心？先下载审阅再执行（推荐给维修人员）</summary>
+      <p style="margin-top:6px;">
+        <code>irm https://tokeneff.com/usb-v1.0.ps1 -OutFile usb.ps1</code> 下载后用记事本打开审阅，
+        再运行 <code>powershell -ExecutionPolicy Bypass -File .\usb.ps1</code>。
+      </p>
+    </details>
+
+    <h3 style="margin-top:14px;">🐧 Linux 用户</h3>
+    <p class="meta">打开终端，粘贴下面的命令后回车：</p>
+    <div class="cmdbox">
+      <div class="cmd" id="cmd-linux">curl -sL https://tokeneff.com/usb-v1.0.sh | sudo bash</div>
+      <button class="copy" data-target="cmd-linux">一键复制</button>
+    </div>
+    <p class="meta">说明：Linux 端脚本不自动下载 Windows 安装镜像；需要的话制作完成后从
+      <a href="https://www.microsoft.com/zh-cn/software-download/" target="_blank" rel="noopener">微软官网</a>
+      下载 ISO 拷入 U盘 ISO 目录即可。</p>
+
+    <h3 style="margin-top:14px;">🍎 macOS 用户</h3>
+    <p class="meta">暂不支持在 macOS 上直接制作。请用 Parallels / UTM 虚拟机安装 Windows 后，
+      按上方 Windows 方式操作（需在虚拟机设置中把 U盘 直通给 Windows）。</p>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>这个命令做了什么？（白话说明，点开查看）</summary>
+      <ol class="steps">
+        <li>检查你的电脑权限（Windows 会弹一个蓝色的授权窗口，点「是」即可）。</li>
+        <li>从我们的服务器获取最新组件清单。</li>
+        <li>找到你插入的 U盘，列出型号和容量让你确认一次——防止选错盘。</li>
+        <li>下载维修系统、WinPE、内存检测等组件，并逐个校验文件完整性；Windows 安装镜像则实时从微软官方服务器获取。</li>
+        <li>把启动引导层和所有文件写入 U盘。</li>
+        <li>最后逐文件复核一遍，全部通过后提示「制作完成，可以拔下使用了」。</li>
+      </ol>
+      <p style="margin-top:8px;" class="meta">整个过程你只需要：复制粘贴命令 + 选择一次 U盘 + 输入一次 YES 确认。</p>
+    </details>
+  </div>
+
+  <div class="card faq">
+    <h2>常见问题</h2>
+
+    <h3>Q：弹出一个蓝色窗口问「是否允许此应用更改设备」？</h3>
+    <p>A：这是 Windows 正常的管理员授权提示（UAC）。制作 U盘 必须获得管理员权限，点「是」即可，属预期行为。</p>
+
+    <h3>Q：杀毒软件或 SmartScreen 弹出提示？</h3>
+    <p>A：脚本需要读写磁盘和联网下载，部分安全软件会提示。本脚本为纯文本、可全文审阅（见上方「先下载审阅再执行」），请确认命令来自本页面后选择「仍要运行/允许」。</p>
+
+    <h3>Q：制作到一半失败了怎么办？</h3>
+    <p>A：多为网络中断或 U盘 接触不良。重新插拔 U盘 后再次执行命令即可（脚本支持断点续传）。反复失败请换一只 U盘，或记下屏幕上的红色错误提示联系客服。</p>
+
+    <h3>Q：制作好的 U盘 怎么用？</h3>
+    <p>A：插到需要维修的电脑上 → 开机时反复按启动菜单键（常见 F12 / F9 / Esc，开机画面有提示）→ 选择 U盘 启动 → 自动进入「AI 电脑维修助手」。</p>
+  </div>
+
+  <div class="card">
+    <h2>脚本校验与变更日志</h2>
+    <p class="meta">用于核对下载的脚本是否为官方原版（供应链防护）。</p>
+    <p class="meta">usb-v1.0.ps1 SHA256：<code>【发布流程填充】</code></p>
+    <p class="meta">usb-v1.0.sh&nbsp;&nbsp;SHA256：<code>【发布流程填充】</code></p>
+    <p class="meta">变更日志：<code>【发布流程填充】</code></p>
+  </div>
+
+  <footer>AI 电脑维修 U盘 · tokeneff.com · 制作页面 v1.0.0（2026-09-12）</footer>
+</div>
+
+<script>
+document.querySelectorAll('button.copy').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var text = document.getElementById(btn.getAttribute('data-target')).innerText;
+    function done() {
+      btn.textContent = '已复制 ✓';
+      btn.classList.add('done');
+      setTimeout(function () { btn.textContent = '一键复制'; btn.classList.remove('done'); }, 2000);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallback(); });
+    } else { fallback(); }
+    function fallback() {  // 兼容旧浏览器
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) { btn.textContent = '请手动复制'; }
+      document.body.removeChild(ta);
+    }
+  });
+});
+</script>
+</body>
+</html>

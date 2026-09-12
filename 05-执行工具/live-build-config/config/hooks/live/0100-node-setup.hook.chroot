@@ -1,0 +1,33 @@
+#!/bin/bash
+# 0100-node-setup.hook.chroot —— Node.js 20 LTS 环境配置（P2-L2b）
+#
+# 前提：Node tarball 已由 build.sh 下载并解压拷入 /opt/node（见 config/includes.chroot/opt/node/README.md）
+# 本 hook 负责：
+#   ① /etc/profile.d 注入 PATH（登录 shell 场景）
+#   ② /usr/local/bin 软链 node/npm/npx（非 login shell、X 会话直接可用——自动登录的
+#      Xfce 会话不一定经过 login shell，必须双保险，设计 §2.2.1-C 同类时序问题）
+#   ③ 构建期验证 node 可执行（挂掉则构建失败，不带病出 ISO）
+set -euo pipefail
+
+NODE_HOME=/opt/node
+
+# 前置断言：tarball 必须已被 build.sh 填充（只放了 README 说明同步失败）
+if [[ ! -x "$NODE_HOME/bin/node" ]]; then
+    echo "[0100] 错误：$NODE_HOME/bin/node 不存在，请检查 build.sh 的 Node 下载步骤" >&2
+    exit 1
+fi
+
+# ① 登录 shell 的 PATH
+cat > /etc/profile.d/node.sh <<'EOF'
+export PATH="/opt/node/bin:$PATH"
+EOF
+chmod 644 /etc/profile.d/node.sh
+
+# ② /usr/local/bin 软链
+ln -sf "$NODE_HOME/bin/node" /usr/local/bin/node
+ln -sf "$NODE_HOME/bin/npm"  /usr/local/bin/npm
+ln -sf "$NODE_HOME/bin/npx"  /usr/local/bin/npx
+
+# ③ 构建期验证
+NODE_VER="$("$NODE_HOME/bin/node" --version)"
+echo "[0100] Node.js 配置完成：$NODE_VER"

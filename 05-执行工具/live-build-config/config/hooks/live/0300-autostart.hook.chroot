@@ -1,0 +1,45 @@
+#!/bin/bash
+# 0300-autostart.hook.chroot —— 自动登录与欢迎脚本自启动（P2-L3）
+#
+# 实现开机自动流程（设计 §2.2）：
+#   自动登录（live 用户，无密码）→ Xfce → 全屏 xfce4-terminal → welcome.sh
+# 本 hook 负责：
+#   ① passwd -d live 清空 live 用户密码（无密码；用户名由 auto/config 的 username=live 启动参数确定）
+#   ② lightdm autologin 配置（auto/config 已装 lightdm；若 P0.5 结论改用 nodm 在此替换）
+#   ③ Xfce 会话自启动 desktop 文件：全屏 xfce4-terminal 执行 welcome.sh
+set -euo pipefail
+
+LIVE_USER=live
+
+# ① 无密码（live-config 默认会给 live 用户设密码 "live"，这里清空）
+passwd -d "$LIVE_USER"
+
+# ①b 免密 sudo（verifier 发现 B2：维修工具链 mount/smartctl/parted/chntpw 等均需 root；
+#    显式写入，不依赖 live-config 默认行为的版本差异）
+cat > /etc/sudoers.d/live-nopasswd <<EOF
+$LIVE_USER ALL=(ALL) NOPASSWD: ALL
+EOF
+chmod 440 /etc/sudoers.d/live-nopasswd
+
+# ② lightdm 自动登录
+mkdir -p /etc/lightdm/lightdm.conf.d
+cat > /etc/lightdm/lightdm.conf.d/50-autologin.conf <<EOF
+[Seat:*]
+autologin-user=$LIVE_USER
+autologin-user-timeout=0
+EOF
+
+# ③ 进 Xfce 后全屏终端跑 welcome.sh（bash -l 走 login shell，保证 /etc/profile.d 的 PATH 生效）
+cat > /etc/xdg/autostart/ai-repair-welcome.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=AI Repair Welcome
+Name[zh_CN]=AI 电脑维修助手
+Comment=Launch AI repair welcome flow in fullscreen terminal
+Comment[zh_CN]=全屏终端启动 AI 维修欢迎流程
+Exec=xfce4-terminal --fullscreen --command "bash -l /usr/local/bin/welcome.sh"
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+
+echo "[0300] 自动登录（$LIVE_USER 无密码 + lightdm autologin）与 welcome.sh 自启动配置完成"

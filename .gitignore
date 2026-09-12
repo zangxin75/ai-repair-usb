@@ -1,0 +1,11 @@
+# 构建产物与缓存
+05-执行工具/dist/
+05-执行工具/live-build-config/cache/
+05-执行工具/live-build-config/.build/
+*.iso
+*.iso.sha256
+# OMC 运行时状态
+.omc/
+# 系统杂项
+.DS_Store
+Thumbs.db
