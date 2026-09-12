@@ -1,9 +1,0 @@
-{
-  "enabledPlugins": {
-    "oh-my-claudecode@omc": true,
-    "github@claude-plugins-official": false,
-    "ralph-loop@claude-plugins-official": false,
-    "cli-anything@cli-anything": false,
-    "rdd-workflow": false
-  }
-}
