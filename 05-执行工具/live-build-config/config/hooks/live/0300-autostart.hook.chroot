@@ -11,8 +11,14 @@ set -euo pipefail
 
 LIVE_USER=live
 
-# ① 无密码（live-config 默认会给 live 用户设密码 "live"，这里清空）
-passwd -d "$LIVE_USER"
+# ① 无密码
+# 注意（bookworm 实测排雷）：live 用户由 live-config 在【首次开机时】创建，
+# 构建期 chroot 里并不存在，passwd -d 会直接报 "user 'live' does not exist" 使构建失败。
+# 因此这里仅做幂等防护；无密码登录实际由 ② 的 lightdm autologin 保证（autologin 不需要密码），
+# ①b 的 NOPASSWD sudoers 在 live-config 建户后自动生效。
+if id "$LIVE_USER" >/dev/null 2>&1; then
+    passwd -d "$LIVE_USER"
+fi
 
 # ①b 免密 sudo（verifier 发现 B2：维修工具链 mount/smartctl/parted/chntpw 等均需 root；
 #    显式写入，不依赖 live-config 默认行为的版本差异）
