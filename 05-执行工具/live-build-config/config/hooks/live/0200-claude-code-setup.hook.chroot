@@ -21,8 +21,9 @@ fi
 # ① 命令软链
 ln -sf "$CLAUDE_BIN" /usr/local/bin/claude
 
-# ② 构建期验证（用 /opt/node 的 node 执行，不依赖 PATH 注入时序）
-CLAUDE_VERSION="$(/opt/node/bin/node "$CLAUDE_BIN" --version | head -n1)"
+# ② 构建期验证（claude-code 2.x 的 bin/claude.exe 实为 Bun 编译的 Linux 原生 ELF
+#    可执行文件，不是 JS——直接执行，不能用 node 加载，否则报 ERR_UNKNOWN_FILE_EXTENSION）
+CLAUDE_VERSION="$("$CLAUDE_BIN" --version | head -n1)"
 [[ -n "$CLAUDE_VERSION" ]]
 
 # ③ 固化版本号

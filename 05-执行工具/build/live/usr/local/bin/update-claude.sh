@@ -59,23 +59,37 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 cd "$WORK"
+# claude-code 2.x 已改为原生单文件可执行分发（Bun 编译，不再是 cli.js）：
+#   主包内的 bin/claude.exe 只是 500 字节占位符；真正的 Linux x64 二进制（约 235MB）
+#   在平台包 @anthropic-ai/claude-code-linux-x64 内，由 postinstall(install.cjs) 复制/硬链过去。
+#   因此：npm 路径 postinstall 自动完成拼装；tarball 路径必须额外抓平台包手动拼装。
+PLATFORM_PKG="@anthropic-ai/claude-code-linux-x64"
 if command -v npm >/dev/null 2>&1; then
     npm install --prefix "$WORK/pkg" "$PKG_NAME@$LATEST" >/dev/null
-    CLI="$WORK/pkg/node_modules/$PKG_NAME/cli.js"
+    PKG_DIR="$WORK/pkg/node_modules/$PKG_NAME"
 else
-    # 无 npm 时直接下 tarball
+    # 无 npm 时直接下 tarball（主包 + 平台包）
     curl -sL --max-time 300 "$NPM_REGISTRY/$PKG_NAME/-/claude-code-$LATEST.tgz" -o pkg.tgz
     mkdir -p "$WORK/pkg" && tar -xzf pkg.tgz -C "$WORK/pkg" && mv "$WORK/pkg/package" "$WORK/pkg/cc"
-    CLI="$WORK/pkg/cc/cli.js"
+    curl -sL --max-time 600 "$NPM_REGISTRY/$PLATFORM_PKG/-/claude-code-linux-x64-$LATEST.tgz" -o plat.tgz
+    tar -xzf plat.tgz -C "$WORK/pkg" && mv "$WORK/pkg/package" "$WORK/pkg/plat"
+    # 用平台包的真实二进制替换主包占位符（等价于 install.cjs 的动作）
+    cp "$WORK/pkg/plat/claude" "$WORK/pkg/cc/bin/claude.exe"
+    PKG_DIR="$WORK/pkg/cc"
 fi
+CLI="$PKG_DIR/bin/claude.exe"
 [[ -f "$CLI" ]] || { echo "下载内容不完整。" >&2; exit 1; }
+chmod +x "$CLI" 2>/dev/null || true
+# 占位符仅 500B，真实二进制约 235MB；体积校验防止把占位符当成品打包
+[[ $(stat -c%s "$CLI") -gt 10000000 ]] || { echo "下载的二进制不完整（疑似占位符，postinstall 未运行）。" >&2; exit 1; }
 
 # 打包为 tar.gz（保留可写层解包后可直接使用的结构）
 mkdir -p "$WORK/stage/bin" "$WORK/stage/lib"
-cp -a "$(dirname "$CLI")" "$WORK/stage/lib/claude-code"
+cp -a "$PKG_DIR" "$WORK/stage/lib/claude-code"
 cat > "$WORK/stage/bin/claude" <<'EOF'
 #!/usr/bin/env bash
-exec node /opt/claude-code-runtime/lib/claude-code/cli.js "$@"
+# claude-code 2.x：bin/claude.exe 是 Bun 编译的原生 Linux 可执行文件，直接执行
+exec /opt/claude-code-runtime/lib/claude-code/bin/claude.exe "$@"
 EOF
 chmod +x "$WORK/stage/bin/claude"
 tar -czf "$OUT_PKG" -C "$WORK/stage" .

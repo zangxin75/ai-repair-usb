@@ -17,6 +17,9 @@
 
 set -e
 
+MIRROR="https://mirrors.aliyun.com/debian"
+MIRROR_SEC="https://mirrors.aliyun.com/debian-security"
+
 lb config noauto \
     --distribution bookworm \
     --parent-distribution bookworm \
@@ -28,6 +31,11 @@ lb config noauto \
     --updates true \
     --backports false \
     --debian-installer none \
+    --mirror-bootstrap "$MIRROR" \
+    --mirror-chroot "$MIRROR" \
+    --mirror-chroot-security "$MIRROR_SEC" \
+    --mirror-binary "$MIRROR" \
+    --mirror-binary-security "$MIRROR_SEC" \
     --bootappend-live "boot=live components username=live hostname=ai-repair locales=zh_CN.UTF-8 keyboard-layouts=cn" \
     --compression xz \
     --image-name "AI-Repair-Live-v0.1-20260912" \

@@ -88,5 +88,6 @@ firmware-iwlwifi
 firmware-atheros
 # Broadcom 无线固件
 firmware-brcm80211
-# MediaTek 无线固件
-firmware-mediatek
+# MediaTek 无线固件：bookworm 中未独立成包，包含在 firmware-misc-nonfree 内
+# （firmware-mediatek 是 trixie 才拆出的独立包，bookworm 装它会报 Unable to locate）
+firmware-misc-nonfree
