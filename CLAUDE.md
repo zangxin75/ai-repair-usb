@@ -27,6 +27,9 @@ cd live-build-config && sudo bash build.sh --deps   # 只准备离线组件（No
 # 静态检查
 bash -n <script>          # 语法检查所有 .sh
 shellcheck <script>       # lint
+
+# 产物（已构建 v0.1，1.4GB，双端 sha256 已校验）
+dist/AI-Repair-Live-v0.1-20260912.iso + .sha256（git 忽略 *.iso，产物不入库）
 ```
 
 ## 构建机 构建机（SSH 接入）
@@ -57,6 +60,20 @@ shellcheck <script>       # lint
 5. **破坏性操作防护**：目标盘选择用 `/dev/disk/by-id/usb-*` + `udevadm ID_BUS` 双重排除 U盘自身；whiptail 确认用 `--defaultno`（必须放在位置参数前）。
 6. **持久化**：弃用 Ventoy persistence 插件，改用 exFAT 数据分区的 `/config/` 目录（凭证、claude-code 更新包 tar.gz——exFAT 不支持软链）。
 7. **供应链红线**：Windows ISO 绝不自托管（Fido 式动态解析微软官方链接）；安装器 URL 版本化（/usb-v1.0.ps1）+ 发布 SHA256。
+
+## 构建实战排雷（2026-09-12 首版 ISO 四轮失败教训）
+
+- **镜像源**：构建机在国内，deb.debian.org 慢到不可用；auto/config 已锁阿里云镜像（~9MB/s）。
+- **claude-code 2.x 是原生二进制**：npm 包里 `bin/claude.exe` 是 Bun 编译的 Linux ELF（~235MB），**不能用 node 加载**（报 ERR_UNKNOWN_FILE_EXTENSION）；主包 tarball 里的 claude.exe 只是 500B 占位符，真实二进制在平台包 `@anthropic-ai/claude-code-linux-x64`，由 postinstall 复制。build.sh 用 npm install（postinstall 自动拼装）；update-claude.sh 无 npm 时手动下平台包拼装 + 体积校验（>10MB）防占位符混入。
+- **live 用户时序**：live 用户由 live-config 在**首次开机**创建，构建期 chroot 内不存在——hook 里不能对它 passwd/useradd（用 `id` 幂等防护）。
+- **lb 脏状态**：build.sh 不做 `lb clean`，跨轮构建的 `.build/` 标记可能与 chroot 实际内容不一致（标记说内核已装、实际 /boot 空）。改 hooks/package-lists 后重构建，先 `sudo rm -rf .build chroot binary*`（保留 cache/ 组件缓存）再跑 build.sh。
+- **远端构建用 nohup 脱离 ssh**：`ssh 构建机 'sudo sh -c "cd ~/ai-repair/live-build-config && nohup bash build.sh > /tmp/iso-build.log 2>&1 &"'`，本地中断/内存清理杀不掉；日志看 `/tmp/iso-build.log`。
+- **bookworm 固件包名**：`firmware-mediatek` 是 trixie 才有的包，bookworm 用 `firmware-misc-nonfree`。
+
+## git 推送
+
+remote URL 不含凭证。推送用一次性 PAT URL（用完即弃，不写入 remote）：
+`git push https://zangxin75:<PAT>@github.com/zangxin75/ai-repair-usb.git main:main`
 
 ## 文档规范（用户全局 CLAUDE.md 强制）
 
