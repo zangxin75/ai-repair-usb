@@ -123,6 +123,7 @@ cat > "$MNT/ventoy/ventoy.json" <<EOF
   "control": [
     { "VTOY_DEFAULT_MENU_MODE": "0" },
     { "VTOY_MENU_TIMEOUT": "${MENU_TIMEOUT}" },
+    { "VTOY_MENU_LANGUAGE": "zh_CN" },
     { "VTOY_DEFAULT_IMAGE": "/ISO/${LIVE_NEW_BASE}" }
   ],
   "boot_menu_alias": [

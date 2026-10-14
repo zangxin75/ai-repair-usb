@@ -12,6 +12,10 @@ xfce4
 xfce4-terminal
 # 显示管理器：live 用户自动登录（hook 0300 配置 autologin）
 lightdm
+# 浏览器（K0 实测缺口：用户需上网查资料 / 到 portal 获取网关 token）
+firefox-esr
+# 浏览器中文界面
+firefox-esr-l10n-zh-cn
 
 # ===== 中文环境 =====
 # fcitx5 输入法框架（daemon 本体）

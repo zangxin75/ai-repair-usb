@@ -14,8 +14,8 @@
 set -euo pipefail
 
 # ===== 版本与命名（升级时改这里；与 auto/config 的 --image-name 保持一致） =====
-IMAGE_VERSION="v0.1"
-IMAGE_DATE="20260912"
+IMAGE_VERSION="v0.3"
+IMAGE_DATE="20261014"
 IMAGE_NAME="AI-Repair-Live-${IMAGE_VERSION}-${IMAGE_DATE}"
 
 # ===== 离线组件版本 =====

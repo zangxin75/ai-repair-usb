@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AI 维修助手
+Name[en]=AI Repair Assistant
+Comment=一键开始与 AI 维修助手对话
+Comment[en]=Start chatting with the AI repair assistant
+Exec=xfce4-terminal --title=AI维修助手 -e /usr/local/bin/ai-assistant.sh
+Icon=utilities-terminal
+Terminal=false
+Categories=System;Utility;
+StartupNotify=true
