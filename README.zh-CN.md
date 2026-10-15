@@ -4,6 +4,10 @@
 
 [![Release](https://img.shields.io/badge/release-v0.3-blue.svg)](../../releases) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![English](https://img.shields.io/badge/README-English-red.svg)](README.md)
 
+![启动演示](assets/demo-boot.gif)
+
+*启动 → 挂载数据分区 → 网络诊断 → AI 维修助手主菜单（QEMU 虚拟机实录 v0.3 ISO）。*
+
 **一根 U盘，四种身份：**
 
 | | 干什么 |

@@ -4,6 +4,10 @@
 
 [![CI](https://github.com/zangxin75/ai-repair-usb/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml) [![Release](https://img.shields.io/badge/release-v0.3-blue.svg)](../../releases) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![简体中文](https://img.shields.io/badge/README-简体中文-red.svg)](README.zh-CN.md)
 
+![Boot demo](assets/demo-boot.gif)
+
+*Boot → mount the data partition → network check → the AI assistant's main menu (recorded in QEMU from the v0.3 ISO).*
+
 **One stick, four jobs:**
 
 | | What it does |
