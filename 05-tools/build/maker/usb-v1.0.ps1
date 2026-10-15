@@ -1,7 +1,7 @@
-# usb-v1.0.ps1 版本: 1.3.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.1  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.0（P-B：+OpenClaw/Pi/便携 Node 勾选，多Agent工作站 P-B）
+# 版本: 1.3.1（P-B：+OpenClaw/Pi/便携 Node 勾选；1.3.1：解压改 tar.exe + Write-Progress 进度心跳，防「假死」观感）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
 # 兼容: PowerShell 5.1+（Win10/Win11 自带，不依赖第三方工具）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5
@@ -22,7 +22,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.0'
+$Script:ScriptVersion   = '1.3.1'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -180,6 +180,62 @@ function Copy-FileWithProgress([string]$Path, [string]$DestDir) {
     Write-Host "    拷入 $name ..."
     robocopy (Split-Path $Path -Parent) $DestDir $name /NJH /NJS /NDL /MT:4
     if ($LASTEXITCODE -ge 8) { throw "robocopy 拷贝失败（退出码 $LASTEXITCODE）: $name" }
+}
+
+# 解压 + 可见进度心跳（1.3.1）：目标多为 exFAT U盘，几万小文件解压动辄十几分钟，
+# 无进度会被当成假死。优先 tar.exe（原生 bsdtar，比 Expand-Archive 快数倍）；
+# tar.gz 必须 tar.exe（-TarOnly，Expand-Archive 不认 tar.gz）；zip 无 tar.exe 时回退后台作业。
+# 进度：zip 从中央目录预读解压总量 → 真百分比；tar.gz 只报「已解压 MB + 耗时」心跳。
+function Expand-WithProgress {
+    param([string]$Archive, [string]$DestDir, [string]$Label, [switch]$TarOnly)
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    $expected = 0L
+    if ($Archive -like '*.zip') {
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+            $z = [System.IO.Compression.ZipFile]::OpenRead($Archive)
+            foreach ($e in $z.Entries) { $expected += $e.Length }
+            $z.Dispose()
+        } catch { $expected = 0L }
+    }
+    New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    if ($tar) {
+        # 参数手工加引号：PS 5.1 Start-Process 不自动引用含空格路径
+        $p = Start-Process -FilePath $tar.Source -ArgumentList @('-xf', "`"$Archive`"", '-C', "`"$DestDir`"") -PassThru -WindowStyle Hidden
+        try {
+            while (-not $p.HasExited) {
+                $bytes = (Get-ChildItem $DestDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+                if (-not $bytes) { $bytes = 0L }
+                if ($expected -gt 0) {
+                    Write-Progress -Activity "解压 $Label" -Status ("{0:N0} / {1:N0} MB（耗时 {2}）" -f ($bytes/1MB), ($expected/1MB), $sw.Elapsed.ToString('mm\:ss')) -PercentComplete ([math]::Min(100, [int](100 * $bytes / $expected)))
+                } else {
+                    Write-Progress -Activity "解压 $Label" -Status ("已解压 {0:N0} MB（耗时 {1}）" -f ($bytes/1MB), $sw.Elapsed.ToString('mm\:ss'))
+                }
+                Start-Sleep -Seconds 2
+            }
+            if ($p.ExitCode -ne 0) { throw "tar.exe 退出码 $($p.ExitCode)（解压 $Label 失败）" }
+        } finally { Write-Progress -Activity "解压 $Label" -Completed }
+    } elseif (-not $TarOnly) {
+        # 回退：Expand-Archive 后台作业 + 同款心跳
+        $job = Start-Job -ScriptBlock { param($a, $d) Expand-Archive -Path $a -DestinationPath $d -Force } -ArgumentList $Archive, $DestDir
+        try {
+            while ($job.State -eq 'Running') {
+                $bytes = (Get-ChildItem $DestDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+                if (-not $bytes) { $bytes = 0L }
+                if ($expected -gt 0) {
+                    Write-Progress -Activity "解压 $Label" -Status ("{0:N0} / {1:N0} MB（耗时 {2}）" -f ($bytes/1MB), ($expected/1MB), $sw.Elapsed.ToString('mm\:ss')) -PercentComplete ([math]::Min(100, [int](100 * $bytes / $expected)))
+                } else {
+                    Write-Progress -Activity "解压 $Label" -Status ("已解压 {0:N0} MB（耗时 {1}）" -f ($bytes/1MB), $sw.Elapsed.ToString('mm\:ss'))
+                }
+                Start-Sleep -Seconds 2
+            }
+            $null = $job | Receive-Job
+            if ($job.State -eq 'Failed') { throw "Expand-Archive 失败（解压 $Label）: $($job.ChildJobs[0].JobStateInfo.Reason.Message)" }
+        } finally { Remove-Job $job -Force -ErrorAction SilentlyContinue; Write-Progress -Activity "解压 $Label" -Completed }
+    } else {
+        throw '系统缺少 tar.exe（需 Win10 1803+），无法解包 tar.gz'
+    }
 }
 
 function Test-FileSha256([string]$Path, [string]$Expected, [string]$DisplayName) {
@@ -728,7 +784,7 @@ Write-Step '正在将 Ventoy 引导层写入 U盘...'
 $ventoyZip = $downloads['ventoy']
 $ventoyDir = Join-Path $Script:WorkDir 'ventoy-extracted'
 if (Test-Path $ventoyDir) { Remove-Item $ventoyDir -Recurse -Force }
-Expand-Archive -Path $ventoyZip -DestinationPath $ventoyDir -Force
+Expand-WithProgress -Archive $ventoyZip -DestDir $ventoyDir -Label 'Ventoy'
 $ventoyExe = Get-ChildItem -Path $ventoyDir -Recurse -Filter 'Ventoy2Disk.exe' | Select-Object -First 1
 if ($null -eq $ventoyExe) { Die 'Ventoy 包内未找到 Ventoy2Disk.exe。' 'manifest 指向的 Ventoy 包可能损坏，请联系客服。' }
 
@@ -869,7 +925,7 @@ if ($Script:ClaudeExeLocal -and (Test-Path $Script:ClaudeExeLocal)) {
 if ($MinGitLocal -and (Test-Path $MinGitLocal)) {
     $gitDest = Join-Path $root 'bin\PortableGit'
     Write-Host '    解压便携 Git 到 U盘 bin\PortableGit ...'
-    Expand-Archive -Path $MinGitLocal -DestinationPath $gitDest -Force
+    Expand-WithProgress -Archive $MinGitLocal -DestDir $gitDest -Label 'PortableGit'
     Write-Ok '便携 Git 已解压到 U盘 bin\PortableGit'
 }
 
@@ -925,7 +981,7 @@ if ($Script:NodeZipLocal -and (Test-Path $Script:NodeZipLocal)) {
         Write-Host '  解压便携 Node ...'   # zip 内含 node-vXX-win-x64\ 顶层目录，解压后把内层挪到 bin\node
         $tmpNode = Join-Path $Script:WorkDir 'node-extract'
         if (Test-Path $tmpNode) { Remove-Item -Recurse -Force $tmpNode }
-        Expand-Archive -Path $Script:NodeZipLocal -DestinationPath $tmpNode -Force
+        Expand-WithProgress -Archive $Script:NodeZipLocal -DestDir $tmpNode -Label '便携 Node'
         $inner = Get-ChildItem -Directory $tmpNode | Select-Object -First 1
         if (-not $inner -or -not (Test-Path (Join-Path $inner.FullName 'node.exe'))) { throw 'zip 内未找到 node.exe' }
         Move-Item $inner.FullName $nodeDir
@@ -943,8 +999,7 @@ if ($Script:OpenclawTarLocal -and (Test-Path $Script:OpenclawTarLocal) -and $hav
         New-Item -ItemType Directory -Force -Path $ocDir | Out-Null
         Write-Host '  解包 OpenClaw 预装包 ...'
         # tar 内为 node_modules\ 顶层；exFAT 无 symlink，预装包已 --dereference 烤平
-        & tar.exe -xzf $Script:OpenclawTarLocal -C $ocDir
-        if ($LASTEXITCODE -ne 0) { throw "tar.exe 退出码 $LASTEXITCODE" }
+        Expand-WithProgress -Archive $Script:OpenclawTarLocal -DestDir $ocDir -Label 'OpenClaw' -TarOnly
         if (-not (Test-Path (Join-Path $ocDir 'node_modules\openclaw\openclaw.mjs'))) { throw '入口 node_modules\openclaw\openclaw.mjs 缺失' }
         $openclawInstalledFinal = $true
         Write-Ok '已解包: bin\openclaw\（OpenClaw，入口 node_modules\openclaw\openclaw.mjs）'
@@ -959,8 +1014,7 @@ if ($Script:PiTarLocal -and (Test-Path $Script:PiTarLocal) -and $haveTar) {
         if (Test-Path $piDir) { Remove-Item -Recurse -Force $piDir }
         New-Item -ItemType Directory -Force -Path $piDir | Out-Null
         Write-Host '  解包 Pi 预装包 ...'
-        & tar.exe -xzf $Script:PiTarLocal -C $piDir
-        if ($LASTEXITCODE -ne 0) { throw "tar.exe 退出码 $LASTEXITCODE" }
+        Expand-WithProgress -Archive $Script:PiTarLocal -DestDir $piDir -Label 'Pi' -TarOnly
         if (-not (Test-Path (Join-Path $piDir 'node_modules\@mariozechner\pi-coding-agent\dist\cli.js'))) { throw '入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js 缺失' }
         $piInstalledFinal = $true
         Write-Ok '已解包: bin\pi\（Pi，入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js）'

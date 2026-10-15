@@ -247,9 +247,17 @@ grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启�
 grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
 [[ $S73 -eq 1 ]] && ok "启动器 0.4.0：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
 
-# 检查 7-4：制作器版本 1.3.0
-grep -q "ScriptVersion   = '1.3.0'" "$MAKER/usb-v1.0.ps1" && grep -q 'SCRIPT_VERSION="1.3.0"' "$MAKER/usb-v1.0.sh" \
-  && ok "两制作器版本 1.3.0（P-B）" || bad "制作器版本号未升至 1.3.0"
+# 检查 7-4：制作器版本 1.3.1
+grep -q "ScriptVersion   = '1.3.1'" "$MAKER/usb-v1.0.ps1" && grep -q 'SCRIPT_VERSION="1.3.1"' "$MAKER/usb-v1.0.sh" \
+  && ok "两制作器版本 1.3.1（P-B + 进度心跳）" || bad "制作器版本号未升至 1.3.1"
+
+# 检查 7-5：解压进度心跳（1.3.1，exFAT 小文件解压防「假死」观感）
+S75=1
+grep -q 'Expand-WithProgress' "$MAKER/usb-v1.0.ps1" || { S75=0; bad "usb-v1.0.ps1 缺 Expand-WithProgress"; }
+grep -q 'Write-Progress' "$MAKER/usb-v1.0.ps1" || { S75=0; bad "usb-v1.0.ps1 缺 Write-Progress"; }
+grep -q 'extract_progress' "$MAKER/usb-v1.0.sh" || { S75=0; bad "usb-v1.0.sh 缺 extract_progress"; }
+grep -q 'Expand-Archive -Path \$' "$MAKER/usb-v1.0.ps1" && { S75=0; bad "ps1 仍有无进度 Expand-Archive 直调残留"; }
+[[ $S75 -eq 1 ]] && ok "两制作器：解压进度心跳（tar.exe 加速 + Write-Progress / du 轮询）"
 
 echo
 echo "=== 结果：通过 $PASS 项 / 失败 $FAIL 项 ==="

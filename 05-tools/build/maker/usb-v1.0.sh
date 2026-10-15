@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.3.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.3.1  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.0
+# 版本: 1.3.1（1.3.1：解压加 extract_progress 心跳，exFAT 慢时防「假死」观感）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
 #
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.3.1"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -321,6 +321,23 @@ sha_check() {  # $1=file $2=expected $3=display
     [ "${actual,,}" = "${2,,}" ] \
         || die "$3 SHA256 校验失败！期望 $2，实际 $actual。文件可能被篡改或下载损坏。" "请重新运行；若反复失败请联系客服。"
     c_ok "$3 校验通过"
+}
+
+# 后台解压 + 心跳进度（1.3.1）：目标多为 exFAT U盘，几万小文件解压动辄十几分钟，
+# 无进度会被当成假死。用法: extract_progress <标签> <目标目录> <命令...>（返回命令退出码）
+extract_progress() {
+    local label="$1" dest="$2"; shift 2
+    "$@" &
+    local pid=$! spin='-\|/' i=0 mb
+    while kill -0 "$pid" 2>/dev/null; do
+        mb="$(du -sm "$dest" 2>/dev/null | cut -f1)"
+        printf '\r    [%s] %s 已写入 %sMB   ' "${spin:$((i++ % 4)):1}" "$label" "${mb:-0}"
+        sleep 2
+    done
+    wait "$pid"
+    local rc=$?
+    printf '\r%*s\r' 50 ''
+    return $rc
 }
 # Ventoy 官方直链（manifest url 为空时的兜底；Linux 端用 tar.gz 包）
 VENTOY_VERSION="1.1.18"
@@ -693,7 +710,7 @@ if [ -n "$NODE_TAR" ]; then
     rm -rf "$MNT/bin/node" "${WORKDIR}/node-extract"
     mkdir -p "${WORKDIR}/node-extract"
     echo "    解压便携 Node ..."
-    if unzip -qo "$NODE_TAR" -d "${WORKDIR}/node-extract" \
+    if extract_progress "便携 Node" "${WORKDIR}/node-extract" unzip -qo "$NODE_TAR" -d "${WORKDIR}/node-extract" \
         && INNER="$(find "${WORKDIR}/node-extract" -maxdepth 1 -mindepth 1 -type d | head -n1)" \
         && [ -f "$INNER/node.exe" ]; then
         # 注意用 -f 不用 -x：zip 内 node.exe 无执行位（external_attr=0），Linux 解出 0664；
@@ -709,7 +726,7 @@ if [ -n "$OC_TAR" ]; then
     rm -rf "$MNT/bin/openclaw"; mkdir -p "$MNT/bin/openclaw"
     echo "    解包 OpenClaw 预装包 ..."
     # tar 内为 node_modules/ 顶层；预装包已 --dereference 烤平符号链接（exFAT 兼容）
-    if tar -xzf "$OC_TAR" -C "$MNT/bin/openclaw" \
+    if extract_progress "OpenClaw" "$MNT/bin/openclaw" tar -xzf "$OC_TAR" -C "$MNT/bin/openclaw" \
         && [ -f "$MNT/bin/openclaw/node_modules/openclaw/openclaw.mjs" ]; then
         OC_INSTALLED=1
         c_ok "已解包: bin/openclaw/（入口 node_modules/openclaw/openclaw.mjs）"
@@ -721,7 +738,7 @@ fi
 if [ -n "$PI_TAR" ]; then
     rm -rf "$MNT/bin/pi"; mkdir -p "$MNT/bin/pi"
     echo "    解包 Pi 预装包 ..."
-    if tar -xzf "$PI_TAR" -C "$MNT/bin/pi" \
+    if extract_progress "Pi" "$MNT/bin/pi" tar -xzf "$PI_TAR" -C "$MNT/bin/pi" \
         && [ -f "$MNT/bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ]; then
         PI_INSTALLED=1
         c_ok "已解包: bin/pi/（入口 node_modules/@mariozechner/pi-coding-agent/dist/cli.js）"
@@ -748,7 +765,7 @@ fi
 if [ -n "$MINGIT_ZIP" ]; then
     mkdir -p "$MNT/bin"
     echo "    解压便携 Git 到 U盘 bin/PortableGit ..."
-    if unzip -qo "$MINGIT_ZIP" -d "$MNT/bin/PortableGit"; then
+    if extract_progress "便携 Git" "$MNT/bin/PortableGit" unzip -qo "$MINGIT_ZIP" -d "$MNT/bin/PortableGit"; then
         c_ok "便携 Git 已解压到 U盘 bin/PortableGit"
     else
         rm -rf "$MNT/bin/PortableGit"
