@@ -2,163 +2,156 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI 电脑维修 U盘 · 一键制作</title>
-<!-- 创建日期: 2026-09-12 | 版本: 1.0.0 | 状态: 草稿（SHA256 与变更日志由发布流程填充） -->
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-    background: #f5f6f8; color: #222; line-height: 1.8; padding: 16px;
-  }
-  .wrap { max-width: 720px; margin: 0 auto; }
-  h1 { font-size: 1.6em; text-align: center; margin: 16px 0 4px; }
-  .sub { text-align: center; color: #666; font-size: .95em; margin-bottom: 16px; }
-  .alert {
-    background: #fdecea; border: 2px solid #e53935; color: #b71c1c;
-    border-radius: 10px; padding: 16px; font-size: 1.1em; font-weight: bold;
-    text-align: center; margin-bottom: 20px;
-  }
-  .card {
-    background: #fff; border-radius: 10px; padding: 18px;
-    margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.08);
-  }
-  .card h2 { font-size: 1.15em; margin-bottom: 8px; }
-  .cmdbox {
-    display: flex; gap: 8px; align-items: stretch; margin: 10px 0;
-    flex-wrap: wrap;
-  }
-  .cmd {
-    flex: 1; min-width: 220px; background: #1e1e1e; color: #9fe870;
-    font-family: Consolas, "Courier New", monospace; font-size: .9em;
-    padding: 12px; border-radius: 8px; word-break: break-all; user-select: all;
-  }
-  button.copy {
-    background: #1976d2; color: #fff; border: none; border-radius: 8px;
-    padding: 0 18px; font-size: 1em; cursor: pointer; min-height: 44px;
-  }
-  button.copy:hover { background: #1565c0; }
-  button.copy.done { background: #2e7d32; }
-  details { margin-top: 8px; }
-  summary { cursor: pointer; color: #1976d2; font-weight: bold; }
-  ol.steps { padding-left: 22px; margin-top: 8px; }
-  .faq h3 { font-size: 1em; margin-top: 12px; }
-  .faq p { color: #444; font-size: .95em; }
-  .meta { font-size: .85em; color: #777; }
-  code { background: #eee; padding: 1px 5px; border-radius: 4px; }
-  footer { text-align: center; color: #999; font-size: .8em; margin-top: 24px; }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>AI 维修 U盘 · 修电脑 · 干活 · 装机，一根全包</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="wrap">
 
-  <h1>AI 电脑维修 U盘 · 一键制作</h1>
-  <p class="sub">插上 U盘，复制一条命令，全自动完成制作。全程中文提示。</p>
-
-  <div class="alert">
-    ⚠️ 制作将清空 U盘全部数据，请先备份！<br>
-    请使用容量 ≥8GB的 U盘。
+<header>
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6v6c0 5 3.8 8.6 9 10 5.2-1.4 9-5 9-10V6l-9-4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8.5 12.2l2.4 2.4 4.6-4.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>AI 维修 U盘</span>
   </div>
+  <a class="nav-link" href="#self-service">查询 / 找回 Key</a>
+</header>
 
-  <div class="card">
-    <h2>第一步：把 U盘 插到这台电脑上</h2>
-    <p>确认 U盘 里没有重要文件（制作过程会清空它）。</p>
-  </div>
+<main>
 
-  <div class="card">
-    <h2>第二步：根据你的电脑系统，复制对应命令</h2>
+  <!-- 首屏：核心 CTA -->
+  <section class="hero">
+    <h1>电脑坏了能救活，<br>电脑没坏能干活</h1>
+    <p class="lede">一根 U盘，装下整个 AI 电脑铺：坏电脑开机进中文 AI 维修系统，<b>对话就能修</b>；好电脑插上秒变<b>免安装的 AI 工作站</b>——Claude Code 写文档做表格，Codex CLI 敲代码，Windows / Debian 双镜像随盘待命。AI 额度<b>免费送、每周自动刷新</b>，不注册、不绑卡。</p>
 
-    <h3 style="margin-top:6px;">🪟 Windows 用户</h3>
-    <p class="meta">按 <code>Win + X</code> → 选「终端」或「Windows PowerShell」，粘贴下面的命令后回车：</p>
-    <div class="cmdbox">
-      <div class="cmd" id="cmd-win">irm https://tokeneff.com/usb-v1.0.ps1 | iex</div>
-      <button class="copy" data-target="cmd-win">一键复制</button>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="win" role="tab" aria-selected="true">Windows</button>
+      <button class="tab" data-tab="linux" role="tab" aria-selected="false">Linux / macOS</button>
     </div>
-    <details>
-      <summary>不放心？先下载审阅再执行（推荐给维修人员）</summary>
-      <p style="margin-top:6px;">
-        <code>irm https://tokeneff.com/usb-v1.0.ps1 -OutFile usb.ps1</code> 下载后用记事本打开审阅，
-        再运行 <code>powershell -ExecutionPolicy Bypass -File .\usb.ps1</code>。
-      </p>
-    </details>
 
-    <h3 style="margin-top:14px;">🐧 Linux 用户</h3>
-    <p class="meta">打开终端，粘贴下面的命令后回车：</p>
-    <div class="cmdbox">
-      <div class="cmd" id="cmd-linux">curl -sL https://tokeneff.com/usb-v1.0.sh | sudo bash</div>
-      <button class="copy" data-target="cmd-linux">一键复制</button>
+    <div id="tab-win" class="tabbody">
+      <div class="cmd" id="cmd-win">irm https://usb.tokeneff.com/maker/usb-v1.0.ps1 | iex</div>
+      <button class="btn copy-cmd" data-target="cmd-win">复制命令</button>
+      <p class="tip">管理员 PowerShell 中粘贴执行。建议 16GB 起步的空白U盘（<b>会被清空</b>，请先备份）；Windows 镜像 + Debian + Codex 全勾选建议 32GB。容量不够？脚本会现场告诉你减掉哪项刚好够，不会做一半失败。</p>
     </div>
-    <p class="meta">说明：Linux 端脚本不自动下载 Windows 安装镜像；需要的话制作完成后从
-      <a href="https://www.microsoft.com/zh-cn/software-download/" target="_blank" rel="noopener">微软官网</a>
-      下载 ISO 拷入 U盘 ISO 目录即可。</p>
+    <div id="tab-linux" class="tabbody hidden">
+      <div class="cmd" id="cmd-linux">curl -sL https://usb.tokeneff.com/maker/usb-v1.0.sh | sudo bash</div>
+      <button class="btn copy-cmd" data-target="cmd-linux">复制命令</button>
+      <p class="tip">想先审阅脚本？<code>curl -sLO …/usb-v1.0.sh &amp;&amp; less usb-v1.0.sh</code></p>
+    </div>
 
-    <h3 style="margin-top:14px;">🍎 macOS 用户</h3>
-    <p class="meta">暂不支持在 macOS 上直接制作。请用 Parallels / UTM 虚拟机安装 Windows 后，
-      按上方 Windows 方式操作（需在虚拟机设置中把 U盘 直通给 Windows）。</p>
-  </div>
-
-  <div class="card">
-    <details>
-      <summary>这个命令做了什么？（白话说明，点开查看）</summary>
-      <ol class="steps">
-        <li>检查你的电脑权限（Windows 会弹一个蓝色的授权窗口，点「是」即可）。</li>
-        <li>从我们的服务器获取最新组件清单。</li>
-        <li>找到你插入的 U盘，列出型号和容量让你确认一次——防止选错盘。</li>
-        <li>下载维修系统、WinPE、内存检测等组件，并逐个校验文件完整性；Windows 安装镜像则实时从微软官方服务器获取。</li>
-        <li>把启动引导层和所有文件写入 U盘。</li>
-        <li>最后逐文件复核一遍，全部通过后提示「制作完成，可以拔下使用了」。</li>
-      </ol>
-      <p style="margin-top:8px;" class="meta">整个过程你只需要：复制粘贴命令 + 选择一次 U盘 + 输入一次 YES 确认。</p>
+    <details id="dl-manual">
+      <summary>手动下载组件</summary>
+      <div id="dl-list" class="tip">正在读取组件清单…</div>
     </details>
-  </div>
+  </section>
 
-  <div class="card faq">
-    <h2>常见问题</h2>
+  <!-- 四种身份 -->
+  <section class="flow">
+    <h2 class="sec-title">一根 U盘，四种身份</h2>
+    <p class="sec-sub">按需出场，互不掺和——修系统的归修系统，干活的归干活。</p>
+    <ol class="flow-grid four">
+      <li>
+        <span class="flow-no">🔧</span>
+        <h2>AI 维修工程师</h2>
+        <p>电脑开不了机、蓝屏死循环、忘了密码、BitLocker 锁死？从 U盘启动进中文维修系统：AI 带你磁盘体检、抢救数据、重置密码、重装系统——危险操作全部先列计划、二次确认，不碰你点头之外的任何字节。</p>
+      </li>
+      <li>
+        <span class="flow-no">📄</span>
+        <h2>办公助手</h2>
+        <p>好电脑上双击 <b>AI-Workstation</b>，选「办公助手」直接开干：千字文案、Excel 公式、邮件润色、报告排版。<b>全程不需要管理员权限</b>，也不改你系统任何设置——借同事的电脑也安心。</p>
+      </li>
+      <li>
+        <span class="flow-no">💻</span>
+        <h2>装机大师</h2>
+        <p>新机部署、老机重灌，一根盘全包：Windows 10 / 11 镜像<b>运行时向微软官网换取官方直链</b>（始终从微软服务器下载，全新正版），Debian 12 安装镜像随盘内置，菜单里点「安装 Debian 12」即走即装。</p>
+      </li>
+      <li>
+        <span class="flow-no">🤖</span>
+        <h2>Codex CLI 携身编程</h2>
+        <p>命令行 AI 编程助手整根带走：写脚本、改代码、批量重构，glm-5.2 满血引擎经 tokeneff 网关直连，配置已写进盘里，换台电脑插上就能用。装机时勾上即装，不勾不占空间。</p>
+      </li>
+    </ol>
+  </section>
 
-    <h3>Q：弹出一个蓝色窗口问「是否允许此应用更改设备」？</h3>
-    <p>A：这是 Windows 正常的管理员授权提示（UAC）。制作 U盘 必须获得管理员权限，点「是」即可，属预期行为。</p>
+  <!-- 三步流程 -->
+  <section class="flow">
+    <h2 class="sec-title">三步，把 AI 电脑铺揣进兜里</h2>
+    <ol class="flow-grid">
+      <li>
+        <span class="flow-no">1</span>
+        <h2>一条命令开工</h2>
+        <p>Windows PowerShell 一行、Linux 终端一行，不用装任何软件。维修系统、Ventoy、镜像全部自动下载，全程无需值守，断了网重跑同一条命令即续传。</p>
+      </li>
+      <li>
+        <span class="flow-no">2</span>
+        <h2>像点菜一样勾组件</h2>
+        <p>中文问答式勾选：Claude Code / Codex CLI / Windows 镜像 / Debian 12，要什么勾什么。收一个邮箱验证码，AI 服务与免费额度即自动写进 U盘——<b>不申请账号、不填 Key、不绑卡</b>。</p>
+      </li>
+      <li>
+        <span class="flow-no">3</span>
+        <h2>开机见菜单，指哪打哪</h2>
+        <p>坏电脑 U盘启动进维修系统，点「AI 维修助手」图标开聊；好电脑双击 AI-Workstation，中文菜单选「维修 / 办公 / 查余额 / Codex」。装了什么，菜单就显示什么，不多不少。</p>
+      </li>
+    </ol>
+    <p class="flow-note">AI 额度每周一刷，U盘 里已有的配置与记录长期保留；额度临时用超，按提示买个小补充包即可继续，几分钟到账。</p>
+  </section>
 
-    <h3>Q：杀毒软件或 SmartScreen 弹出提示？</h3>
-    <p>A：脚本需要读写磁盘和联网下载，部分安全软件会提示。本脚本为纯文本、可全文审阅（见上方「先下载审阅再执行」），请确认命令来自本页面后选择「仍要运行/允许」。</p>
+  <!-- 自助区：引导到官网登录（v0.3.1：余额/Key 管理统一走 portal 账号） -->
+  <section id="self-service" class="self-service">
+    <h2 class="sec-title">查询余额 · 管理 Key</h2>
+    <p class="sec-sub">日常使用无需来这页。想查余额、找回 Key 或吊销（U盘遗失）时，登录官网自助管理。</p>
 
-    <h3>Q：制作到一半失败了怎么办？</h3>
-    <p>A：多为网络中断或 U盘 接触不良。重新插拔 U盘 后再次执行命令即可（脚本支持断点续传）。反复失败请换一只 U盘，或记下屏幕上的红色错误提示联系客服。</p>
+    <section class="card">
+      <h3>登录官网</h3>
+      <div class="row"><span class="label">登录地址</span><span class="val"><a href="https://tokeneff.com/login" target="_blank" rel="noopener">tokeneff.com/login</a></span></div>
+      <div class="row"><span class="label">登录邮箱</span><span class="val">制作 U盘 时验证的邮箱</span></div>
+      <div class="row"><span class="label">登录密码</span><span class="val">制作 U盘 时设置的密码</span></div>
+      <a class="btn wide" href="https://tokeneff.com/login" target="_blank" rel="noopener">前往 tokeneff.com 登录</a>
+      <p class="tip">忘记密码？重新制作 U盘（或重跑制作命令）时，用同一邮箱收一次验证码并设置新密码即可重置，U盘 里已有的 Key 不受影响。制作时没设过密码的老用户，同样重跑一次制作命令补设即可。</p>
+    </section>
+  </section>
 
-    <h3>Q：制作好的 U盘 怎么用？</h3>
-    <p>A：插到需要维修的电脑上 → 开机时反复按启动菜单键（常见 F12 / F9 / Esc，开机画面有提示）→ 选择 U盘 启动 → 自动进入「AI 电脑维修助手」。</p>
-  </div>
+  <!-- 常见问题 -->
+  <section class="faq">
+    <h2 class="sec-title">常见问题</h2>
+    <details>
+      <summary>U盘插上坏电脑没反应 / 不出现启动菜单？</summary>
+      <p>多为前置 USB 口供电或兼容性问题：<b>换到主板后置 USB 口</b>再开机；台式机优先用机箱背后的接口。仍不行，进 BIOS 确认开启了 USB 启动并关闭 Secure Boot。</p>
+    </details>
+    <details>
+      <summary>AI 服务需要配置 token 吗？要花钱吗？</summary>
+      <p>都不用。制作 U盘 时通过邮箱验证已自动配置，开机即用；附带免费 AI 额度，<b>每周自动刷新</b>。若制作时跳过了邮箱验证，首次开机会有一次输入提示。</p>
+    </details>
+    <details>
+      <summary>办公助手和 Codex 会动我电脑的设置吗？</summary>
+      <p>办公助手全程以普通权限运行，只帮你写文档、算公式、润色邮件，不做任何系统改动（遇到系统问题会引导你切维修模式）。Codex 在你指定的项目目录里干活，重要改动会先征求确认。想删随时整个删掉，不留残余。</p>
+    </details>
+    <details>
+      <summary>做盘时 Codex / Debian 没勾，后来想要了怎么办？</summary>
+      <p>在同一根 U盘上重跑一次制作命令，把想要的项勾上即可补装；已有的 AI 配置和记录不受影响。</p>
+    </details>
+    <details>
+      <summary>U盘丢了怎么办？</summary>
+      <p>登录 <a href="https://tokeneff.com/login" target="_blank" rel="noopener">tokeneff.com</a> 后在管理页面吊销 Key 即可，他人捡到也无法继续使用。每个 Key 有用量上限，损失有界。</p>
+    </details>
+    <details>
+      <summary>会弄坏我的电脑或数据吗？</summary>
+      <p>维修系统从 U盘独立运行，不依赖坏电脑的硬盘。涉及写入硬盘的操作（重装系统、分区等）AI 都会先列出计划并二次确认。</p>
+    </details>
+    <details>
+      <summary>制作中断网 / 失败了怎么办？</summary>
+      <p>脚本会自动重试；网络恢复后重新执行同一条命令即可，已下载的组件会续用。也可展开「手动下载组件」逐个获取。</p>
+    </details>
+  </section>
 
-  <div class="card">
-    <h2>脚本校验与变更日志</h2>
-    <p class="meta">用于核对下载的脚本是否为官方原版（供应链防护）。</p>
-    <p class="meta">usb-v1.0.ps1 SHA256：<code>【发布流程填充】</code></p>
-    <p class="meta">usb-v1.0.sh&nbsp;&nbsp;SHA256：<code>【发布流程填充】</code></p>
-    <p class="meta">变更日志：<code>【发布流程填充】</code></p>
-  </div>
+</main>
 
-  <footer>AI 电脑维修 U盘 · tokeneff.com · 制作页面 v1.0.0（2026-09-12）</footer>
-</div>
+<footer>
+  <div>AI 电脑维修 U盘 · <a href="https://tokeneff.com" target="_blank" rel="noopener">tokeneff.com</a></div>
+  <div class="fine">遇到问题？重新插拔U盘或联系卖家。</div>
+</footer>
 
-<script>
-document.querySelectorAll('button.copy').forEach(function (btn) {
-  btn.addEventListener('click', function () {
-    var text = document.getElementById(btn.getAttribute('data-target')).innerText;
-    function done() {
-      btn.textContent = '已复制 ✓';
-      btn.classList.add('done');
-      setTimeout(function () { btn.textContent = '一键复制'; btn.classList.remove('done'); }, 2000);
-    }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, function () { fallback(); });
-    } else { fallback(); }
-    function fallback() {  // 兼容旧浏览器
-      var ta = document.createElement('textarea');
-      ta.value = text; document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); done(); } catch (e) { btn.textContent = '请手动复制'; }
-      document.body.removeChild(ta);
-    }
-  });
-});
-</script>
+<script src="app.js"></script>
 </body>
 </html>
