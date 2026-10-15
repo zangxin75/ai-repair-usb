@@ -2,14 +2,14 @@
 
 > Boot a dead PC into a Chinese-language AI repair system. Plug the same stick into a healthy PC and get a portable AI workstation — Claude Code, Codex CLI, and more, zero install, zero residue. **Your tools follow you, not your machines.**
 
-[![Release](https://img.shields.io/badge/release-v0.3-blue.svg)](../../releases) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![简体中文](https://img.shields.io/badge/README-简体中文-red.svg)](README.zh-CN.md)
+[![CI](https://github.com/zangxin75/ai-repair-usb/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml) [![Release](https://img.shields.io/badge/release-v0.3-blue.svg)](../../releases) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![简体中文](https://img.shields.io/badge/README-简体中文-red.svg)](README.zh-CN.md)
 
 **One stick, four jobs:**
 
 | | What it does |
 |---|---|
 | 🔧 **AI Repair Engineer** | PC won't boot / BSOD loop / forgotten password / BitLocker? Boot from the stick into a Debian 12 live system with a conversational AI that walks you through disk checks, data rescue, password resets, and reinstalls. Dangerous operations always require explicit confirmation. |
-| 📄 **Office Assistant** | On a healthy PC, double-click `AI-Workstation` and pick "办公助手": drafts, Excel formulas, email polish, report formatting. No admin rights, no system changes — safe on a borrowed laptop. |
+| 📄 **Office Assistant** | On a healthy PC, double-click `AI-Workstation` and pick the office-assistant mode: drafts, Excel formulas, email polish, report formatting. No admin rights, no system changes — safe on a borrowed laptop. |
 | 💻 **Install Master** | Windows 10/11 ISOs are fetched live from Microsoft's official servers (we never redistribute a single Microsoft byte); Debian 12 netinst ships on the stick. |
 | 🤖 **Portable AI agents** | Codex CLI, OpenClaw and Pi ride along, pre-wired to any Anthropic/OpenAI-compatible gateway. Plug into any PC and start coding. |
 
