@@ -2,7 +2,7 @@
 
 - 创建日期：2026-10-15
 - 版本：v1.1（定稿，审计 ACCEPT）
-- 状态：A2/A4/A5 已实施并通过 smoke 29/29（2026-10-15）；A1 真 token 复测与 A3 上线待用户提供测试 key
+- 状态：**A1/A2/A4/A5 全部通过，A3 已上线**（2026-10-15）。A3：codex.exe v0.162.1 自托管上线（manifest 1.0.4，线上 Range 下载 9MB/s 实测），Linux 版真实会话打网关输出正常。余项：真机验收 K1a（用户）
 - 作者：kt + Claude Code
 - 上游设计：`04-技术方案/技术方案_U盘便携多Agent工作站_v1.2_20261015.md`（两轮审计后 ACCEPT，残留清零）
 
@@ -41,6 +41,15 @@
 3. 若 codex.exe 可得（GitHub Releases 官方源），本机 `CODEX_HOME=临时目录` 起真实会话一次。
 - 验收：两条 200 + codex 会话输出非空。**不通则 A3 顺延**（A2/A4 的 Claude 部分不受阻）。
 
+**A1 执行结果（2026-10-15 ✅ 通过）**：测试 key 经 portal `/api/usb/activate`（批次A）签发，四端点全 200：
+`/v1/chat/completions`（glm-4-flash / glm-4-air）✅、`/v1/messages`（claude-sonnet-4-5 → 网关映射 glm-5.2）✅、`/v1/responses`（glm-5.2，Codex wire_api）✅、`/api/usb/balance` ✅（周额度惰性授信 2000万在账，扣减正常计数）。
+排雷（三层，逐层剥离后才 200）：
+1. **credit 预检**：usb 租户无 `credit_purchases` 记录 → 网关 quota 预检拒（deny 被 A2M 支付墙包成误导性 402「请支付¥5尝鲜包」）。修复：portal usb.py `_topup_usb_free_credit`（activate/幂等分支/balance 三处调用，payment_method='usb_free' 惰性补足至周额度）。
+2. **月软上限=0（真正根因）**：`plans.usb-free` 的 `prompts_per_month_soft=0`，而网关判定是 `用量>=上限` → 0≥0 全拒。修复：DB 改 20000（usb-free 是全表唯一 0 值套餐，教训：建套餐时 0 不等于"不限"，各闸 0 语义不一致——5h加权/周次 0=不限，月软上限 0=全拒）。
+3. **LiteLLM key 模型白名单**：Claude Code 发 `claude-*` 名 → 网关 `_quota_model_for` 用映射后的 real_model（glm-5.2）做套餐校验 → usb-free 原只白 {glm-4-air,glm-4-flash} → model_restricted→同样被包成 402。修复：plans.usb-free + usb_batches A/B + 存量 key（LiteLLM /key/update）全部加白 glm-5.2。**结论：usb 套餐白名单必须包含 glm-5.2（Claude Code 映射落点），否则 Live 端 Claude Code 全挂**。
+- 另：quota deny 缓存 `_QUOTA_CACHE_TTL`≈60s，改配置后需等缓存过期再复测；真实 deny reason 可查 prometheus `gateway_quota_denied_total`（:9091）与网关日志 `quota_check` warning。
+- codex.exe 真实会话（验收第 3 条）待 A3 完成后补测。
+
 ### A2 启动器改造（3h）
 改造点（repair-on-windows.ps1）：
 1. **菜单先于提权**：现流程「.bat 双击即提权（bat:15-20）→ ps1 UAC 自检（63 行起）→ … → 主菜单 Read-Host（566 行，顶层代码非函数）」。改为：**两侧同步**——bat 删提权块后直接调 ps1；ps1 入口先出模式菜单（不自动提权）：
@@ -57,7 +66,13 @@
 5. 版本 0.2.0 → 0.3.0。
 - 验收（本机可测部分）：PS 5.1 语法解析过（`powershell -NoProfile -Command "{}"` 无法本机测，用 `pwsh -NoProfile -c "[scriptblock]::Create((Get-Content -Raw x.ps1))"` 或 ast 解析）；菜单/UI 用 Pester 或 dry-run 手查；真机验收归 K1a。
 
-### A3 Codex 集成（2h，依赖 A1 通过）
+### A3 Codex 集成（2h，依赖 A1 通过）✅ 已完成（2026-10-15）
+
+**执行结果**：
+- codex.exe 获取：GitHub 直链/各镜像在国内均不可用（构建机 直连 6.7KB/s、ghfast 30KB/s），改走**官方 npm 包** `@openai/codex@0.162.1-win32-x64`（npmmirror CDN 9MB/s，tarball sha1 与 npmjs 官方 registry 一致 = 字节级同源；解出 codex.exe 尺寸与 GitHub Release 同名资产完全一致 333,479,728B，sha256 `dd13bdb1…49a6a`）。
+- 自托管：构建机 `~/ai-repair/dist/codex-x86_64-pc-windows-msvc.exe`（/downloads/ 直出，Range 下载实测 9MB/s）。
+- manifest 1.0.4 新增 codex 组件（url/sha256/sizeBytes/version=0.162.1，required=false）；usb-web 容器已重建，线上 manifest 与 content-length 均验证。
+- 真实会话验收：Linux 版 codex（同版本 npm 包）`CODEX_HOME` 临时目录 + 测试 key，经 tokeneff responses API（glm-5.2）输出正常（「好的」）。config.toml 模板与制作器落盘一致（wire_api=responses）。
 1. **下载源**：GitHub Releases `openai/codex` 官方 `codex-x86_64-pc-windows-msvc.exe`（zip 或 exe，实现时以 Releases 实际产物为准），钉 sha256（发布侧 digest），落 manifest 组件表 `codex.exe`；
 2. **制作器新增第 6.6 步**（勾选了 codex 才走）：Temp 下载 → sha256 校验 → mv 到 `bin\codex.exe`（沿用便携 claude 模式）；
 3. **配置落盘** `config\codex\config.toml`（移植 onboard.py:488 模板，路径参数化）：

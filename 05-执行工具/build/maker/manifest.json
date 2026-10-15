@@ -1,7 +1,7 @@
 {
   "_comment": "AI 电脑维修 U盘 一键制作器 · 组件清单（S5 web 首次制作流程定稿版）。发布流程每次发布重写本文件；安装器启动时总是拉取最新 manifest —— 组件升级 = 改本文件，无需改安装器（方案 §2.5.4）。托管: usb.tokeneff.com/maker/（与主站分域，故障隔离）。v0.1 阶段 ventoy/winpe/memtest 仍为占位（K0 实测/P4.5 构建后填充），ai-repair-live 为真实可下载产物。",
-  "version": "1.0.3",
-  "generated": "2026-10-15T11:30:00+08:00",
+  "version": "1.0.4",
+  "generated": "2026-10-15T17:30:00+08:00",
   "components": [
     {
       "name": "ventoy",
@@ -47,6 +47,16 @@
       "sha256": "TODO",
       "required": true,
       "notes": "开源内存检测工具。来源: https://www.memtest.org"
+    },
+    {
+      "name": "codex",
+      "filename": "codex-x86_64-pc-windows-msvc.exe",
+      "url": "https://usb.tokeneff.com/downloads/codex-x86_64-pc-windows-msvc.exe",
+      "sizeBytes": 333479728,
+      "sha256": "dd13bdb162a184fa04039488b234a8258ef9b76f84e926c505d5742b19249a6a",
+      "required": false,
+      "version": "0.162.1",
+      "notes": "OpenAI Codex CLI v0.162.1 Windows x64 单文件 exe（勾选安装，经 config/codex/config.toml 接入 tokeneff 网关 glm-5.2，wire_api=responses）。取自官方 npm 包 @openai/codex@0.162.1-win32-x64（tarball sha1 与 npmjs 官方 registry 一致，尺寸与 GitHub Release 同名资产一致），自托管本站 /downloads/ 保证国内可达。来源: https://github.com/openai/codex/releases/tag/rust-v0.162.1"
     },
     {
       "name": "win10",
