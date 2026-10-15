@@ -38,8 +38,8 @@ lb config noauto \
     --mirror-binary-security "$MIRROR_SEC" \
     --bootappend-live "boot=live components username=live hostname=ai-repair locales=zh_CN.UTF-8 keyboard-layouts=cn" \
     --compression xz \
-    --image-name "AI-Repair-Live-v0.3-20261014" \
+    --image-name "AI-Repair-Live-v0.4-20261016" \
     --iso-application "AI Repair Live" \
     --iso-publisher "AI-Repair Project" \
-    --iso-volume "AI-Repair-Live-v0.3" \
+    --iso-volume "AI-Repair-Live-v0.4" \
     "${@}"
