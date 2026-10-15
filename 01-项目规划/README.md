@@ -31,6 +31,7 @@
   - [x] verifier 独立验证（首轮 FAIL：2 高危 + 3 中危；修复后复验 **PASS**，冒烟测试 15/15 全绿）
   - [x] 首版 ISO 构建成功（**AI-Repair-Live-v0.1-20260912.iso，1.4GB**，构建机 四轮排雷后产出：中国镜像 / bookworm 固件包名 / claude-code 2.x 原生二进制 / live 用户时序 / lb 脏状态；sha256 已校验，内核+initrd+squashfs+16 个维修脚本+任务文本+claude-code 均验证在盘）
   - [x] **v0.3 发布（2026-10-15）**：AI-Repair-Live-v0.3-20261014.iso（1.5GB，sha256 已校验）— 内置 Claude 技能集（smart-diagnosis / data-rescue / systematic-debugging / verification-before-completion，随 ISO 静态分发）+ Token 签发与桌面直启；manifest 1.0.3 + 制作器 usb-v1.0.sh v1.1.0 已上线 usb.tokeneff.com，全链路（manifest / maker 脚本 / ISO / .sha256）线上 200 验证通过。技能热更新因 exFAT /config 供应链风险延后（见 P-A 计划）
+  - [x] **P-A 实施（2026-10-15，A2/A4/A5）**：启动器 repair-on-windows.ps1 0.3.0（模式菜单先于提权：维修按需 UAC / 办公助手免提权 / Codex 入口按 agents.json 显隐 / Claude 未装不回落）；双入口 AI-Workstation.bat（与 bat 逐字节一致）+ 办公人格 office-CLAUDE.md；制作器 1.2.0 双侧（勾选交互 + 两段容量预检 MinBaseGB=5 + agents.json/isos.json + Debian netinst + ventoy 别名 + codex 落盘链路）；smoke 第 6 节 7 项断言（29/29 通过）；已同步 usb.tokeneff.com 部署验证。**余项**：A1 真 token 复测、A3 上线（均待用户提供测试 key 或邮箱验证流程）
   - [ ] 真机启动测试（待 U盘/测试机）
 - [ ] 场景三（Windows 在线维修）新功能：① repair-on-windows.ps1 启动器 → ② 维修记录系统（customer/enterprise 双模式）+ 机器指纹召回 → ④ 凭证残留策略 → ⑤ 任务文本环境感知增强 → ⑥ tokeneff key 激活发放与引流转化（激活制 + 分层验证 + 并发限额 + 推广码分成，方案见 04-技术方案/技术方案_AI电脑维修U盘_场景三Windows在线维修新增功能_20261013.md）
 

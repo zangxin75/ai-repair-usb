@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.1.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.2.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.1.0
+# 版本: 1.2.0
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
 #
@@ -15,13 +15,15 @@
 #   curl -sL https://usb.tokeneff.com/maker/usb-v1.0.sh | sudo bash
 # 审阅后再执行（推荐）:
 #   curl -sLO https://usb.tokeneff.com/maker/usb-v1.0.sh && less usb-v1.0.sh && sudo bash usb-v1.0.sh
+#   可选（P-A A4）: sudo bash usb-v1.0.sh --agents claude,codex,linux   # 跳过逐项问答，逗号分隔；
+#   claude=便携 Claude Code / codex=Codex CLI / linux=Debian 12 netinst；未列项视为不装
 # =====================================================================
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.2.0"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
-MIN_DISK_GB=8
+MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
 MAX_RETRY=3
 PORTAL_API_BASE="https://tokeneff.com/api/usb"   # 制作时签发 USB token 的 portal 接口前缀（换域名改这里）
@@ -129,10 +131,10 @@ c_ok "组件清单获取成功（清单版本: ${MANIFEST_VERSION}）"
 c_step "正在检测已插入的 U盘 ..."
 # 只列 TRAN=usb 的整块磁盘 —— 硬过滤系统盘/内置盘（§2.5.3-2）
 mapfile -t USB_DISKS < <(lsblk -d -n -o NAME,TRAN | awk '$2=="usb"{print $1}')
-[ "${#USB_DISKS[@]}" -gt 0 ] || die "未检测到 U盘。" "请插入容量 ≥8GB 的 U盘 后重新运行。"
+[ "${#USB_DISKS[@]}" -gt 0 ] || die "未检测到 U盘。" "请插入容量 ≥${MIN_BASE_GB}GB 的 U盘 后重新运行。"
 
-# 候选 = 容量 ≥8GB 的 USB 磁盘；小存储（读卡器/加密狗）提示后忽略
-MIN_BYTES=$((64 * 1024 * 1024 * 1024))
+# 候选 = 容量 ≥基础门槛 的 USB 磁盘；小存储（读卡器/加密狗）提示后忽略
+MIN_BYTES=$((MIN_BASE_GB * 1024 * 1024 * 1024))
 CANDIDATES=()
 for d in "${USB_DISKS[@]}"; do
     sz=$(lsblk -d -n -o SIZE -b "/dev/$d" 2>/dev/null || lsblk -d -n -o SIZE "/dev/$d" | head -n1)
@@ -141,10 +143,10 @@ for d in "${USB_DISKS[@]}"; do
         CANDIDATES+=("$d")
     else
         model=$(lsblk -d -n -o MODEL "/dev/$d" | head -n1)
-        echo "  已忽略 /dev/$d（${model:-未知型号}，容量不足 8 GB，非制作目标）"
+        echo "  已忽略 /dev/$d（${model:-未知型号}，容量不足 ${MIN_BASE_GB} GB，非制作目标）"
     fi
 done
-[ "${#CANDIDATES[@]}" -gt 0 ] || die "所有 USB 磁盘容量均不足 8 GB。" "请更换容量 ≥8GB（推荐 128GB）的 U盘 后重新运行。"
+[ "${#CANDIDATES[@]}" -gt 0 ] || die "所有 USB 磁盘容量均不足 ${MIN_BASE_GB} GB。" "请更换容量 ≥${MIN_BASE_GB}GB（推荐 128GB）的 U盘 后重新运行。"
 
 echo ""
 usb_size() { lsblk -d -n -o SIZE,MODEL "/dev/$1" | head -n1; }
@@ -170,8 +172,23 @@ fi
 TARGET_DEV="/dev/${TARGET_NAME}"
 SIZE_BYTES="$(lsblk -d -n -b -o SIZE "$TARGET_DEV" | head -n1 | tr -d ' ')"
 SIZE_GB=$((SIZE_BYTES / 1024 / 1024 / 1024))
-[ "$SIZE_GB" -ge "$MIN_DISK_GB" ] \
-    || die "所选 U盘 容量约 ${SIZE_GB}GB，小于最低要求 ${MIN_DISK_GB}GB。" "请更换容量 ≥8GB（推荐 128GB）的 U盘。"
+[ "$SIZE_GB" -ge "$MIN_BASE_GB" ] \
+    || die "所选 U盘 容量约 ${SIZE_GB}GB，小于最低要求 ${MIN_BASE_GB}GB。" "请更换容量 ≥${MIN_BASE_GB}GB（推荐 128GB）的 U盘 后重新运行。"
+
+# ---------------- 4.5 --agents 参数解析（P-A A4：参数优先，缺省逐项问答） ----------------
+AGENTS_ARG=""
+for ((ai=1; ai<=$#; ai++)); do
+    a="${!ai}"
+    if [ "$a" = "--agents" ]; then
+        an=$((ai+1)); AGENTS_ARG="${!an:-}"
+        [ -n "$AGENTS_ARG" ] || die "--agents 需要参数（如 --agents claude,codex,linux）。" ""
+    elif [[ "$a" == --agents=* ]]; then
+        AGENTS_ARG="${a#--agents=}"
+    fi
+done
+case "$AGENTS_ARG" in *[^a-z,]*)
+    die "--agents 参数含非法字符（只接受逗号分隔的 claude/codex/linux）。" "" ;;
+esac
 
 # ---------------- 5. 毁盘警告 + YES 确认 ----------------
 echo ""
@@ -182,6 +199,57 @@ printf '\033[31m  该操作不可恢复，请先备份 U盘 中的重要文件�
 printf '\033[31m!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\033[0m\n'
 read -rp "确认继续请输入大写 YES: " CONFIRM
 [ "$CONFIRM" = "YES" ] || { echo "已取消，未对 U盘 做任何修改。"; exit 0; }
+
+# ---------------- 5.5 Agent / Linux 镜像勾选（P-A A4）+ 容量动态复查 ----------------
+# Codex 可用性由 manifest 驱动：清单含 codex 组件（url 非空）才可选；否则提示跳过且 agents.json 不记 codex 条目
+CODEX_URL="$(json_get codex url)"
+CODEX_FNAME="$(json_get codex filename)"
+CODEX_SHA="$(json_get codex sha256)"
+CODEX_AVAILABLE=0; [ -n "$CODEX_URL" ] && CODEX_AVAILABLE=1
+[ "$CODEX_AVAILABLE" = "1" ] || c_warn "Codex CLI 暂不可用（发布清单未提供），本次制作已跳过，不影响其他组件。"
+
+DEBIAN_NAME="debian-12.8.0-amd64-netinst.iso"
+DEBIAN_URL="https://cdimage.debian.org/cdimage/archive/12.8.0/amd64/iso-cd/debian-12.8.0-amd64-netinst.iso"
+DEBIAN_SHA="04396d12b0f377958a070c38a923c227832fa3b3e18ddc013936ecf492e9fbb3"
+DEBIAN_GB=1     # ~650MB，取整 1GB 余量
+CODEX_GB=1      # ~334MB，取整 1GB 余量
+
+if [ -n "$AGENTS_ARG" ]; then
+    # --agents 参数优先：逗号分隔，未列项视为不装；codex 不可用时忽略该项并提示
+    WANT_CLAUDE=0; WANT_CODEX=0; WANT_DEBIAN=0
+    case ",$AGENTS_ARG," in *",claude,"*) WANT_CLAUDE=1 ;; esac
+    case ",$AGENTS_ARG," in *",codex,"*)  WANT_CODEX=1 ;; esac
+    case ",$AGENTS_ARG," in *",linux,"*)  WANT_DEBIAN=1 ;; esac
+    if [ "$WANT_CODEX" = "1" ] && [ "$CODEX_AVAILABLE" = "0" ]; then
+        c_warn "--agents 含 codex 但当前不可用，已忽略该项。"
+        WANT_CODEX=0
+    fi
+    c_ok "已按 --agents 勾选: Claude=$( [ $WANT_CLAUDE = 1 ] && echo 装 || echo 不装 ) / Codex=$( [ $WANT_CODEX = 1 ] && echo 装 || echo 不装 ) / Debian=$( [ $WANT_DEBIAN = 1 ] && echo 装 || echo 不装 )"
+else
+    # 缺省逐项 y/n 问答；回车默认（claude 默认装，其余默认不装）
+    read -rp "安装便携 Claude Code（维修/办公 AI 引擎，约 236MB）？(Y/n): " R1
+    [ "${R1,,}" = "n" ] && WANT_CLAUDE=0 || WANT_CLAUDE=1
+    WANT_CODEX=0
+    if [ "$CODEX_AVAILABLE" = "1" ]; then
+        read -rp "安装 Codex CLI（OpenAI 风格命令行助手，约 334MB）？(y/N): " R2
+        [ "${R2,,}" = "y" ] && WANT_CODEX=1
+    fi
+    read -rp "附带 Debian 12 netinst 安装镜像（约 650MB）？(y/N): " R3
+    [ "${R3,,}" = "y" ] && WANT_DEBIAN=1 || WANT_DEBIAN=0
+fi
+
+# —— 容量动态复查（第二段）：MinBaseGB + Σ勾选项；不足时给出建议取消项（优先 Debian → codex）——
+NEED_GB=$((MIN_BASE_GB))
+[ "$WANT_CODEX" = "1" ] && NEED_GB=$((NEED_GB + CODEX_GB))
+[ "$WANT_DEBIAN" = "1" ] && NEED_GB=$((NEED_GB + DEBIAN_GB))
+# Windows 镜像需手动拷入（Linux 端不下载），此处不叠加 WinISO 体积
+if [ "$NEED_GB" -gt "$SIZE_GB" ]; then
+    c_warn "勾选后预计需要约 ${NEED_GB}GB，所选 U盘（约 ${SIZE_GB}GB）可能不足。建议取消（按优先级）："
+    [ "$WANT_DEBIAN" = "1" ] && echo "    - 取消 Debian 12 镜像（省约 1GB）"
+    [ "$WANT_CODEX" = "1" ] && echo "    - 取消 Codex CLI（省约 1GB）"
+    read -rp "输入 C 继续（空间不足风险自负）/ 其他任意键退出: " RC
+    [ "${RC^^}" = "C" ] || { echo "已取消，未对 U盘 做任何修改。"; exit 0; }
+fi
 
 # ---------------- 6. 下载自产组件 + SHA256 校验 ----------------
 c_step "开始下载组件（curl 断点续传）..."
@@ -231,11 +299,14 @@ done
 
 # ---------------- 6.5 场景③便携运行时：claude.exe + MinGit（可选，失败不阻断） ----------------
 # U盘 bin\ 内置后，任意 Windows 双击 repair-on-windows.bat 免安装直跑；
-# 失败只警告：双击入口自动回落在线安装（方案 5.3 降级链不变）
+# 失败只警告：双击入口自动回落在线安装（方案 5.3 降级链不变）。
+# P-A A4：按勾选裁剪——claude 仅勾选时下载；PortableGit 为 claude/codex 共用，任一勾选即安装
 CLAUDE_EXE=""; CLAUDE_SHA=""
 MINGIT_ZIP=""
 mkdir -p "${WORKDIR}/portable-bin"
-if CLAUDE_VER="$(fetch_retry "${CLAUDE_GCS_BASE}/stable" - | tr -d '[:space:]')" && [ -n "$CLAUDE_VER" ]; then
+if [ "$WANT_CLAUDE" != "1" ]; then
+    echo "    未勾选 Claude Code，跳过 claude.exe 下载。"
+elif CLAUDE_VER="$(fetch_retry "${CLAUDE_GCS_BASE}/stable" - | tr -d '[:space:]')" && [ -n "$CLAUDE_VER" ]; then
     CLAUDE_MANIFEST="${CLAUDE_GCS_BASE}/${CLAUDE_VER}/manifest.json"
     CLAUDE_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n 's/.*"win32-x64"[^C]*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)"
     if [ -z "$CLAUDE_SHA" ]; then
@@ -256,19 +327,51 @@ if CLAUDE_VER="$(fetch_retry "${CLAUDE_GCS_BASE}/stable" - | tr -d '[:space:]')"
 else
     c_warn "Claude Code 官方分发桶不可达，跳过便携版 claude.exe（不阻断制作）。"
 fi
-echo "    便携 Git（Bash 工具依赖，约 154MB）..."
-if fetch_retry "$PORTABLE_GIT_URL" "${WORKDIR}/portable-bin/TempPortableGit.zip"; then
-    actual="$(sha256sum "${WORKDIR}/portable-bin/TempPortableGit.zip" | awk '{print $1}')"
-    if [ "${actual,,}" = "${PORTABLE_GIT_SHA,,}" ]; then
-        mv "${WORKDIR}/portable-bin/TempPortableGit.zip" "${WORKDIR}/portable-bin/PortableGit.zip"
-        MINGIT_ZIP="${WORKDIR}/portable-bin/PortableGit.zip"
-        c_ok "便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）"
+if [ "$WANT_CLAUDE" = "1" ] || [ "$WANT_CODEX" = "1" ]; then
+    echo "    便携 Git（Bash 工具依赖，约 154MB）..."
+    if fetch_retry "$PORTABLE_GIT_URL" "${WORKDIR}/portable-bin/TempPortableGit.zip"; then
+        actual="$(sha256sum "${WORKDIR}/portable-bin/TempPortableGit.zip" | awk '{print $1}')"
+        if [ "${actual,,}" = "${PORTABLE_GIT_SHA,,}" ]; then
+            mv "${WORKDIR}/portable-bin/TempPortableGit.zip" "${WORKDIR}/portable-bin/PortableGit.zip"
+            MINGIT_ZIP="${WORKDIR}/portable-bin/PortableGit.zip"
+            c_ok "便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）"
+        else
+            rm -f "${WORKDIR}/portable-bin/TempPortableGit.zip"
+            c_warn "便携 Git sha256 校验失败，已跳过（不阻断制作）——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+        fi
     else
-        rm -f "${WORKDIR}/portable-bin/TempPortableGit.zip"
-        c_warn "便携 Git sha256 校验失败，已跳过（不阻断制作）——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+        c_warn "便携 Git 下载失败。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
     fi
 else
-    c_warn "便携 Git 下载失败。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+    echo "    未勾选任何 AI 引擎，跳过便携 Git 下载。"
+fi
+
+# ---------------- 6.6 Codex CLI（P-A A4：勾选了 codex 才走；失败降级 installed=false） ----------------
+CODEX_EXE=""
+if [ "$WANT_CODEX" = "1" ] && [ "$CODEX_AVAILABLE" = "1" ]; then
+    echo "    Codex CLI（${CODEX_FNAME}，约 334MB）..."
+    if fetch_retry "$CODEX_URL" "${WORKDIR}/codex-download.exe" \
+        && sha_check "${WORKDIR}/codex-download.exe" "$CODEX_SHA" "$CODEX_FNAME"; then
+        mv "${WORKDIR}/codex-download.exe" "${WORKDIR}/codex.exe"
+        CODEX_EXE="${WORKDIR}/codex.exe"
+        c_ok "Codex CLI 就绪（发布侧 sha256 校验通过）"
+    else
+        rm -f "${WORKDIR}/codex-download.exe"
+        c_warn "Codex CLI 下载/校验失败。不阻断制作——盘上将不装 Codex，启动器不显示其入口。"
+    fi
+fi
+
+# ---------------- 6.7 Debian 12 netinst（P-A A4：勾选了 Debian 才走；官方直链 + 官方钉值） ----------------
+DEBIAN_ISO=""
+if [ "$WANT_DEBIAN" = "1" ]; then
+    echo "    Debian 12 netinst（${DEBIAN_NAME}，官方 cdimage 存档直链，约 650MB）..."
+    if fetch_retry "$DEBIAN_URL" "${WORKDIR}/${DEBIAN_NAME}" \
+        && sha_check "${WORKDIR}/${DEBIAN_NAME}" "$DEBIAN_SHA" "$DEBIAN_NAME"; then
+        DEBIAN_ISO="${WORKDIR}/${DEBIAN_NAME}"
+        c_ok "Debian 12 netinst 就绪（官方 SHA256SUMS 钉值校验通过）"
+    else
+        c_warn "Debian 12 镜像下载/校验失败。不阻断制作——盘上将无 Linux 安装镜像。"
+    fi
 fi
 
 # ---------------- 7. Ventoy 无人值守写入 ----------------
@@ -338,8 +441,19 @@ for name in ai-repair-live winpe 'memtest86+'; do
     [ -n "${LOCAL_FILE[$name]:-}" ] && copy_progress "${LOCAL_FILE[$name]}" "$MNT/ISO"
 done
 
+# Debian 12 netinst（P-A A4：勾选且下载成功才拷入）
+if [ -n "$DEBIAN_ISO" ]; then
+    copy_progress "$DEBIAN_ISO" "$MNT/ISO"
+    c_ok "已放入 Linux 安装镜像: ${DEBIAN_NAME}"
+fi
+
 # ventoy.json：默认启动 AI-Repair-Live、菜单超时 3 秒、中文菜单别名
 LIVE_FNAME="$(json_get ai-repair-live filename)"
+# P-A A4：勾选 Debian 时增 "/ISO/<debian>" => "安装 Debian 12" 别名分支（未勾选为空，占位行合法）
+DEBIAN_ALIAS_LINE=""
+if [ -n "$DEBIAN_ISO" ]; then
+    DEBIAN_ALIAS_LINE='    { "image": "/ISO/${DEBIAN_NAME}", "alias": "安装 Debian 12" }'
+fi
 cat > "$MNT/ventoy/ventoy.json" <<EOF
 {
   "control": [
@@ -351,7 +465,8 @@ cat > "$MNT/ventoy/ventoy.json" <<EOF
   "boot_menu_alias": [
     { "image": "/ISO/${LIVE_FNAME}", "alias": "AI 电脑维修助手（推荐）" },
     { "image": "/ISO/WinPE_x64.iso", "alias": "WinPE 装机维护环境" },
-    { "image": "/ISO/MemTest86+.iso", "alias": "MemTest86+ 内存检测" }
+    { "image": "/ISO/MemTest86+.iso", "alias": "MemTest86+ 内存检测" }${DEBIAN_ALIAS_LINE:+,
+    { "image": "/ISO/${DEBIAN_NAME}", "alias": "安装 Debian 12" }}
   ]
 }
 EOF
@@ -439,14 +554,44 @@ else
     fi
 fi
 
-# 场景③ Windows 在线维修双击入口（repair-on-windows.bat/.ps1，与制作脚本同源同目录）
-for f in repair-on-windows.bat repair-on-windows.ps1; do
+# 场景③ Windows 在线维修双击入口（P-A A4 双入口投放：AI-Workstation.bat 与 bat 同内容，设计 §9-3）
+for f in repair-on-windows.bat repair-on-windows.ps1 AI-Workstation.bat; do
     if fetch_retry "https://usb.tokeneff.com/maker/$f" "$MNT/$f"; then
         c_ok "已放入 Windows 在线维修入口: $f"
     else
         c_warn "$f 下载失败（Windows 在线维修入口缺失，不影响 U盘 启动维修）"
     fi
 done
+
+# 办公助手人格（P-A A2/A4）：config/office/CLAUDE.md（勾选了 claude 才投放）
+if [ "$WANT_CLAUDE" = "1" ]; then
+    mkdir -p "$MNT/config/office"
+    if fetch_retry "https://usb.tokeneff.com/maker/office-CLAUDE.md" "$MNT/config/office/CLAUDE.md"; then
+        c_ok "已放入: config/office/CLAUDE.md（办公助手人格）"
+    else
+        c_warn "office-CLAUDE.md 获取失败。不影响制作——办公模式将以通用模式启动。"
+    fi
+fi
+
+# Codex CLI 落盘（P-A A3/A4：bin/codex.exe + config/codex/config.toml）
+CODEX_INSTALLED=0
+if [ -n "$CODEX_EXE" ]; then
+    mkdir -p "$MNT/bin" "$MNT/config/codex"
+    cp "$CODEX_EXE" "$MNT/bin/codex.exe"
+    cat > "$MNT/config/codex/config.toml" <<'TOML'
+# Codex CLI 配置（制作器生成；AI 维修U盘 P-A）
+model_provider = "tokeneff"
+model = "glm-5.2"
+
+[model_providers.tokeneff]
+name = "tokeneff gateway"
+base_url = "https://tokeneff.com/v1"
+env_key = "TOKENEFF_API_KEY"
+wire_api = "responses"
+TOML
+    CODEX_INSTALLED=1
+    c_ok "已放入: bin/codex.exe + config/codex/config.toml"
+fi
 
 # 场景③便携运行时 → U盘 bin\（claude.exe 直跑 + MinGit 提供 bash）
 if [ -n "$CLAUDE_EXE" ]; then
@@ -473,6 +618,37 @@ if [ -n "$MINGIT_ZIP" ]; then
     fi
 fi
 
+# agents.json / isos.json（P-A A4：启动器据此显隐入口；语义与设计 §4.0 对齐）
+#   installed=true → 列出并启动；userDeclined=true → 灰色行；两者皆无 → 隐藏
+CLAUDE_INSTALLED=0; [ -n "$CLAUDE_EXE" ] && CLAUDE_INSTALLED=1
+CLAUDE_DECLINED=0; [ "$WANT_CLAUDE" = "1" ] || CLAUDE_DECLINED=1
+CODEX_DECLINED=0; [ "$WANT_CODEX" = "1" ] || CODEX_DECLINED=1
+if command -v jq >/dev/null 2>&1; then
+    jq -n \
+        --argjson ci "$CLAUDE_INSTALLED" --argjson cd "$CLAUDE_DECLINED" \
+        --argjson xi "$CODEX_INSTALLED" --argjson xd "$CODEX_DECLINED" \
+        --argjson xavail "$CODEX_AVAILABLE" \
+        '{claude:{installed:$ci,userDeclined:$cd}} + (if $xavail==1 then {codex:{installed:$xi,userDeclined:$xd}} else {} end)' \
+        > "$MNT/config/agents.json"
+else
+    python3 - "$CLAUDE_INSTALLED" "$CLAUDE_DECLINED" "$CODEX_INSTALLED" "$CODEX_DECLINED" "$CODEX_AVAILABLE" \
+        > "$MNT/config/agents.json" <<'PYJS'
+import json, sys
+ci, cd, xi, xd, xa = map(int, sys.argv[1:])
+d = {"claude": {"installed": bool(ci), "userDeclined": bool(cd)}}
+if xa:
+    d["codex"] = {"installed": bool(xi), "userDeclined": bool(xd)}
+print(json.dumps(d, indent=2))
+PYJS
+fi
+if [ -n "$DEBIAN_ISO" ]; then
+    printf '{\n  "debian": {\n    "filename": "%s",\n    "sha256": "%s",\n    "source": "%s"\n  }\n}\n' \
+        "$DEBIAN_NAME" "$DEBIAN_SHA" "$DEBIAN_URL" > "$MNT/config/isos.json"
+else
+    printf '{}\n' > "$MNT/config/isos.json"
+fi
+c_ok "已写入: config/agents.json + config/isos.json（AI 引擎勾选记录）"
+
 sync
 c_ok "镜像与配置拷入完成"
 
@@ -484,6 +660,15 @@ for name in ai-repair-live winpe 'memtest86+'; do
     [ -n "$sha" ] || continue                     # 无哈希（动态解析的官方包）跳过
     sha_check "$MNT/ISO/$fname" "$sha" "$fname"
 done
+# Codex 盘上复核（P-A A4：勾选且已落盘才校验；未勾选不得因缺失报错）
+if [ "$CODEX_INSTALLED" = "1" ]; then
+    sha_check "$MNT/bin/codex.exe" "$CODEX_SHA" "bin/codex.exe"
+    [ -f "$MNT/config/codex/config.toml" ] || die "config/codex/config.toml 缺失。" "请重新运行制作器。"
+fi
+# Debian 盘上复核（勾选且已拷入才校验）
+if [ -n "$DEBIAN_ISO" ]; then
+    sha_check "$MNT/ISO/$DEBIAN_NAME" "$DEBIAN_SHA" "$DEBIAN_NAME"
+fi
 umount "$MNT"
 
 echo ""
@@ -494,10 +679,13 @@ echo ""
 echo "使用方法: 将 U盘 插入需要维修的电脑 → 开机按启动菜单键(F12/F9/Esc) → 选择 U盘 启动"
 if [ -f "$MNT/repair-on-windows.bat" ]; then
     if [ -f "$MNT/bin/claude.exe" ]; then
-        echo "电脑还能进 Windows 时: 双击 U盘 根目录 repair-on-windows.bat，即可在 Windows 内在线维修（免安装直跑，无需重启）"
+        echo "电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在 Windows 内在线维修/办公（免安装直跑，无需重启）"
     else
-        echo "电脑还能进 Windows 时: 双击 U盘 根目录 repair-on-windows.bat，即可在线维修（首次将在线安装 claude）"
+        echo "电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在线维修（首次将在线安装 claude）"
     fi
+fi
+if [ -n "$DEBIAN_ISO" ]; then
+    echo "已附带 Debian 12 netinst: 启动菜单选择「安装 Debian 12」即可"
 fi
 echo "提示: 需要 Windows 安装镜像时，请从微软官网下载 ISO 后拷入 U盘 ISO 目录："
 echo "      https://www.microsoft.com/zh-cn/software-download/"

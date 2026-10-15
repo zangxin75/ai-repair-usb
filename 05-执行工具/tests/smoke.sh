@@ -153,6 +153,63 @@ RG_DESC=$(awk '/^description:/{sub(/^description: */,"");print;exit}' "$SKILLS/r
 [[ "$RG_DESC" == *坏道* || "$RG_DESC" == *异响* ]] && { NEG_OK=0; bad "reinstall-guardrail description 含「坏道/异响」"; }
 [[ $NEG_OK -eq 1 ]] && ok "负例禁词零命中（重装×data-rescue、坏道异响×reinstall-guardrail）"
 
+# ───────────────────────── 第 6 节：maker 产物断言（P-A A5，计划 §2） ─────────────────────────
+MAKER="build/maker"
+
+# 检查 6-1：容量两段预检——无硬编码 8GB 门槛；MinBaseGB=5 + 动态复查存在
+S61=1
+grep -q 'MinBaseGB' "$MAKER/usb-v1.0.ps1" || { S61=0; bad "usb-v1.0.ps1 缺 MinBaseGB 常量"; }
+grep -Eq 'MinBaseGB[[:space:]]*=[[:space:]]*5' "$MAKER/usb-v1.0.ps1" || { S61=0; bad "usb-v1.0.ps1 MinBaseGB 应为 5"; }
+grep -Eq 'MIN_BASE_GB=5' "$MAKER/usb-v1.0.sh" || { S61=0; bad "usb-v1.0.sh 缺 MIN_BASE_GB=5"; }
+grep -n 'MinDiskGB\|MIN_DISK_GB' "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" | grep -qv '#' && { S61=0; bad "仍残留 MinDiskGB/MIN_DISK_GB 引用"; }
+grep -q '容量动态复查' "$MAKER/usb-v1.0.ps1" || { S61=0; bad "usb-v1.0.ps1 缺容量动态复查段"; }
+grep -q '容量动态复查' "$MAKER/usb-v1.0.sh" || { S61=0; bad "usb-v1.0.sh 缺容量动态复查段"; }
+[[ $S61 -eq 1 ]] && ok "两段容量预检（选盘前 MinBaseGB=5 + 勾选后动态复查）"
+
+# 检查 6-2：usb-v1.0.sh 支持 --agents
+grep -q -- '--agents' "$MAKER/usb-v1.0.sh" && ok "usb-v1.0.sh 支持 --agents 参数" || bad "usb-v1.0.sh 缺 --agents 支持"
+
+# 检查 6-3：两制作器均写 agents.json 与 isos.json
+S63=1
+for f in usb-v1.0.ps1 usb-v1.0.sh; do
+  grep -q 'agents.json' "$MAKER/$f" || { S63=0; bad "$f 缺 agents.json 写入"; }
+  grep -q 'isos.json' "$MAKER/$f" || { S63=0; bad "$f 缺 isos.json 写入"; }
+done
+[[ $S63 -eq 1 ]] && ok "两制作器均生成 agents.json / isos.json"
+
+# 检查 6-4：提权重构——bat 无提权块；ps1 中 RunAs 仅在维修模式分支（锚文本序：模式菜单提示行号 < RunAs 行号）
+S64=1
+for b in repair-on-windows.bat AI-Workstation.bat; do
+  grep -qe '-Verb RunAs' -e 'net session' "$MAKER/$b" && { S64=0; bad "$b 仍含提权块（-Verb RunAs / net session）"; }
+  grep -q 'repair-on-windows.ps1' "$MAKER/$b" || { S64=0; bad "$b 未调用 repair-on-windows.ps1"; }
+done
+MENU_LINE=$(grep -n -- '模式菜单' "$MAKER/repair-on-windows.ps1" | head -1 | cut -d: -f1)
+RUNAS_LINE=$(grep -n -- '-Verb RunAs' "$MAKER/repair-on-windows.ps1" | head -1 | cut -d: -f1)
+[[ -n "$MENU_LINE" && -n "$RUNAS_LINE" && "$MENU_LINE" -lt "$RUNAS_LINE" ]] || { S64=0; bad "ps1 模式菜单锚文本行号($MENU_LINE) 应先于 RunAs($RUNAS_LINE)"; }
+[[ $S64 -eq 1 ]] && ok "提权链重构（bat 无提权块；ps1 RunAs 仅在维修模式分支）"
+
+# 检查 6-5：config.toml 模板内容（网关域名正确 + wire_api）
+S65=1
+for f in usb-v1.0.ps1 usb-v1.0.sh; do
+  grep -q 'wire_api = "responses"' "$MAKER/$f" || { S65=0; bad "$f config.toml 模板缺 wire_api"; }
+  grep -q 'base_url = "https://tokeneff.com/v1"' "$MAKER/$f" || { S65=0; bad "$f config.toml 模板 base_url 非法"; }
+  grep -q 'api\.tokeneff\.com' "$MAKER/$f" && { S65=0; bad "$f 出现不存在的 api.tokeneff.com"; }
+done
+[[ $S65 -eq 1 ]] && ok "config.toml 模板（wire_api=responses / tokeneff.com/v1 / 无 api 子域）"
+
+# 检查 6-6：AI-Workstation.bat 与 repair-on-windows.bat 逐字节一致且均调 ps1
+if cmp -s "$MAKER/AI-Workstation.bat" "$MAKER/repair-on-windows.bat"; then
+  ok "AI-Workstation.bat 与 repair-on-windows.bat 内容一致（cmp）"
+else
+  bad "AI-Workstation.bat 与 repair-on-windows.bat 内容不一致"
+fi
+
+# 检查 6-7：ventoy.json 生成段含「安装 Debian 12」别名分支（变量化条件）
+S67=1
+grep -q '安装 Debian 12' "$MAKER/usb-v1.0.ps1" || { S67=0; bad "usb-v1.0.ps1 ventoy 别名缺 Debian 分支"; }
+grep -q '安装 Debian 12' "$MAKER/usb-v1.0.sh" || { S67=0; bad "usb-v1.0.sh ventoy 别名缺 Debian 分支"; }
+[[ $S67 -eq 1 ]] && ok "ventoy.json 含「安装 Debian 12」条件别名分支"
+
 echo
 echo "=== 结果：通过 $PASS 项 / 失败 $FAIL 项 ==="
 [[ $FAIL -eq 0 ]] || exit 1

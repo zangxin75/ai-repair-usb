@@ -1,19 +1,26 @@
-# repair-on-windows.ps1 版本: 0.2.0  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+# repair-on-windows.ps1 版本: 0.3.0  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
-# 版本: 0.2.0（0.1.0 + 便携模式：U盘 bin\claude.exe 优先直跑、免安装；缺失/损坏回落在线安装）
+# 版本: 0.3.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
+#        Codex CLI 入口按 agents.json 显隐；多Agent工作站 P-A A2）
+#        0.2.0（0.1.0 + 便携模式：U盘 bin\claude.exe 优先直跑、免安装；缺失/损坏回落在线安装）
 #        0.1.0（W1 骨架 + W2 激活/余额/验证接入，RDD 需求表 R1-R41）
-# 状态: 草稿（待 T1 双机真机验收；网关 /api/usb/* 按 5.4 契约编码，未上线前靠 mock 驱动）
+# 状态: 草稿（待 K1a 真机验收；网关 /api/usb/* 按 5.4 契约编码，未上线前靠 mock 驱动）
 # 兼容: PowerShell 5.1+（Win10/Win11 自带，不依赖第三方模块）
 # 设计依据: 技术方案_AI电脑维修U盘_场景三Windows在线维修新增功能_20261013.md V1.2
 #           功能 1/3/4、5.1 settings.conf、5.3 安装失败降级链、5.4 API 契约、5.5 激活接入
-# 用法: 双击同目录 repair-on-windows.bat（自动请求 UAC 提权），或直接运行本 ps1
+#           技术方案_U盘便携多Agent工作站_v1.2_20261015.md §6（启动器多模式）
+# 用法: 双击同目录 repair-on-windows.bat（不自动提权，由模式菜单按需触发），或直接运行本 ps1
 # =====================================================================
 
 #requires -Version 5.1
+param(
+    # 防提权循环标记：自提升重入时携带；也用于绕过模式菜单直接进维修流程
+    [switch]$Elevated
+)
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.2.0'
+$Script:ScriptVersion   = '0.3.0'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -54,33 +61,15 @@ function Show-OfflineFallback() {
     Write-Host '-----------------------------------------------------------' -ForegroundColor Yellow
 }
 
-# ---------------- 1. UAC 权限自检（R1-R4：拒绝则降级为只读诊断模式） ----------------
-# 与制作器不同：本脚本在U盘上有实体文件路径（$PSCommandPath 恒可用），
+# ---------------- 1. 权限状态检测（P-A A2：菜单先于提权，此处只检测不请求） ----------------
+# 提权请求延迟到模式菜单选择「维修模式」时按需触发（-Verb RunAs 在主流程菜单分支内）；
 # 拒绝提权不退出 —— 仅限制为只读诊断类任务（方案功能 1 定稿）。
 $Script:IsAdmin = $false
 $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Warn '维修操作需要管理员权限，正在请求提权（请在弹出的 UAC 窗口点「是」）...'
-    if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
-        # 从管道执行（无文件路径）时无法自提升 → 直接进入只读诊断模式
-        Write-Warn '当前以管道方式运行，无法自动提权，进入只读诊断模式。'
-    } else {
-        try {
-            # 自提升并传 -Elevated 标记，避免新进程再次触发提权判断
-            Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList @(
-                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Elevated'
-            )
-            exit 0    # 原低权进程退出，由提权后的新进程继续
-        } catch {
-            Write-Warn '用户取消了管理员授权 —— 本次仅允许只读诊断类任务。'
-        }
-    }
-} else {
+if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $Script:IsAdmin = $true
 }
-if ($Script:IsAdmin) { Write-Ok '已获得管理员权限（全功能模式）' }
-else                 { Write-Warn '当前为只读诊断模式：维修会话不可用（需管理员权限）' }
 
 # ---------------- 2. 盘符定位（R5/R6：读自身所在路径定位U盘根与 /config/） ----------------
 if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) {
@@ -423,9 +412,74 @@ function Install-Claude() {
     Die 'claude 安装失败，无法进行 Windows 在线维修。' '请按上方指引排查后重试，或直接用U盘离线维修（场景②），无需在 Windows 内安装任何软件。'
 }
 
+# ---------------- 10.5 agents.json 解析（P-A A2/A4：制作器勾选结果，驱动入口显隐） ----------------
+# 存量盘无 agents.json → $null，全按现状兼容（Claude 在则用，菜单不出现 Codex 项）
+$Script:Agents = $null
+$agentsPath = Join-Path $Script:ConfigDir 'agents.json'
+if (Test-Path $agentsPath) {
+    try { $Script:Agents = Get-Content $agentsPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { Write-Warn 'agents.json 解析失败，按无 Codex 处理' }
+}
+$Script:ClaudeDeclined = $false
+$Script:CodexInstalled = $false
+$Script:CodexDeclined  = $false
+if ($Script:Agents) {
+    if ($Script:Agents.PSObject.Properties['claude'] -and $Script:Agents.claude.userDeclined -eq $true) {
+        $Script:ClaudeDeclined = $true
+    }
+    if ($Script:Agents.PSObject.Properties['codex'] -and $Script:Agents.codex) {
+        # installed=true → 可启动；userDeclined=true（未装）→ 灰色行提示；两者皆无 → 隐藏
+        if ($Script:Agents.codex.installed -eq $true) { $Script:CodexInstalled = $true }
+        elseif ($Script:Agents.codex.userDeclined -eq $true) { $Script:CodexDeclined = $true }
+    }
+}
+
+function Start-CodexSession() {
+    # Codex CLI 会话（P-A A3）：便携 bin\codex.exe + CODEX_HOME 指向 config\codex
+    $codexExe = Join-Path $Script:UsbRoot 'bin\codex.exe'
+    if (-not (Test-Path $codexExe)) {
+        Write-Warn 'bin\codex.exe 缺失（下载失败或已被删除）。重跑制作命令可补装。'
+        Read-Host '按回车键返回' | Out-Null
+        return
+    }
+    $codexHome = Join-Path $Script:ConfigDir 'codex'
+    if (-not (Test-Path (Join-Path $codexHome 'config.toml'))) {
+        Write-Warn "config\codex\config.toml 缺失，无法启动 Codex。重跑制作命令可补装。"
+        Read-Host '按回车键返回' | Out-Null
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($Script:AuthKey)) {
+        Write-Warn '未获取到凭证（auth_token），无法启动 Codex。请先经「查询余额 / 管理账号」完成激活。'
+        Read-Host '按回车键返回' | Out-Null
+        return
+    }
+    # 环境注入：key 仅进本进程环境，不落盘（功能 4 BYOK；同 Start-ClaudeSession 语义）
+    $env:CODEX_HOME = $codexHome
+    $env:TOKENEFF_API_KEY = $Script:AuthKey
+    # PATH 前置 bin\ 与便携 Git（Codex 沙箱依赖 bash/git，与 claude 直跑共用 PortableGit）
+    $binDir = Join-Path $Script:UsbRoot 'bin'
+    $pg = Join-Path $binDir 'PortableGit'
+    if (Test-Path (Join-Path $pg 'bin\bash.exe')) {
+        $env:PATH = "$pg\cmd;$pg\bin;$pg\usr\bin;$binDir;$env:PATH"
+    } else {
+        $env:PATH = "$binDir;$env:PATH"
+    }
+    Write-Step '启动 Codex CLI 会话（退出会话后返回本菜单）'
+    & $codexExe
+    Write-Host ''
+    Write-Ok '会话已结束，按回车返回'
+    Read-Host | Out-Null
+}
+
 # ---------------- 11. 会话启动（R29/R34/R35） ----------------
 
 function Start-ClaudeSession([string]$Mode) {
+    # 制作时明确未勾选 Claude 的盘：不触发在线安装回落，仅提示补装（P-A A2）
+    if ($Script:ClaudeDeclined) {
+        Write-Warn '此盘未安装 Claude 引擎（制作时未勾选）。重跑制作命令可补装。'
+        Read-Host '按回车键返回' | Out-Null
+        return
+    }
     # 环境变量注入：key 仅进本进程环境，不落盘（功能 4 BYOK）
     $gateway = if ($Script:Conf.ContainsKey('GATEWAY_BASE_URL') -and -not [string]::IsNullOrWhiteSpace($Script:Conf['GATEWAY_BASE_URL'])) {
         $Script:Conf['GATEWAY_BASE_URL']
@@ -465,6 +519,16 @@ function Start-ClaudeSession([string]$Mode) {
         Write-Step '启动只读诊断会话（本会话禁止任何写操作，仅收集信息与给出建议）'
         # 只读约束通过 --append-system-prompt 注入（不修改U盘上的 CLAUDE.md）
         $claudeArgs += @('--append-system-prompt', '【只读诊断模式】你处于只读诊断模式：禁止执行任何写操作（不改注册表、不删改文件、不停启用服务/驱动），只允许收集信息、诊断并给出文字建议。')
+    } elseif ($Mode -eq 'office') {
+        # 办公助手模式（P-A A2）：注入 config\office\CLAUDE.md 人格，无需提权
+        Write-Step '启动办公助手会话（写文档/表格/文案，退出会话后返回本菜单）'
+        $officeMd = Join-Path $Script:ConfigDir 'office\CLAUDE.md'
+        if (Test-Path $officeMd) {
+            # 人格同样经 --append-system-prompt 注入（已验证参数，不修改U盘上的 CLAUDE.md）
+            $claudeArgs += @('--append-system-prompt', (Get-Content $officeMd -Raw))
+        } else {
+            Write-Warn "config\office\CLAUDE.md 缺失，将以通用模式启动（无人格注入）。"
+        }
     } else {
         Write-Step '启动维修会话（退出会话后返回本菜单）'
     }
@@ -554,26 +618,88 @@ if ($balance.verification_required -eq $true) {
     }
 }
 
-# --- 主菜单（R33：PS 编号选择循环，whiptail 不存在于 PS） ---
+# --- 模式菜单（P-A A2：菜单先于提权，选「维修模式」才触发 UAC） ---
+# 激活/余额/邮箱验证对三种模式共用，已在上方完成；[2]/[3] 全程普通权限。
+# -Elevated：提权重入（Start-Process -Verb RunAs 携带）直进维修模式，跳过模式菜单
+$skipModeMenu = $Elevated.IsPresent
 while ($true) {
-    Write-Host ""
-    Write-Host "---------------- 主菜单 ----------------" -ForegroundColor Cyan
-    Write-Host "  [1] 只读诊断（收集信息 + 给出建议，不改系统）"
-    if ($Script:IsAdmin) { Write-Host "  [2] 维修会话（需管理员权限，已具备）" }
-    else { Write-Host "  [2] 维修会话（不可用：未获得管理员权限，请重新以管理员运行）" -ForegroundColor DarkGray }
-    Write-Host "  [3] 余额查询"
-    Write-Host "  [4] 退出（清理本机临时文件）"
-    $choice = (Read-Host '请输入编号').Trim()
+    if ($skipModeMenu) { $choice = '1'; $skipModeMenu = $false }
+    else {
+        Write-Host ""
+        Write-Host "---------------- 模式菜单 ----------------" -ForegroundColor Cyan
+        Write-Host "  [1] 维修模式（需管理员权限，处理系统级问题）"
+        Write-Host "  [2] 办公助手模式（无需提权，写文档/表格/文案）"
+        Write-Host "  [3] 查询余额 / 管理账号"
+        if ($Script:CodexInstalled) {
+            Write-Host "  [4] Codex CLI（命令行 AI 助手，OpenAI 风格）"
+        } elseif ($Script:CodexDeclined) {
+            Write-Host "  [4] Codex CLI（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
+        }
+        Write-Host "  [0] 退出（清理本机临时文件）"
+        $choice = (Read-Host '请输入编号').Trim()
+    }
     switch ($choice) {
-        '1' { Start-ClaudeSession -Mode 'readonly' }
-        '2' {
+        '1' {
+            # 维修模式：未提权时此处按需请求 UAC（拒绝 → 降级只读诊断，沿用 R3/R4 语义）
             if (-not $Script:IsAdmin) {
-                Write-Warn '维修会话需要管理员权限。请关闭本窗口，右键 repair-on-windows.bat 选择「以管理员身份运行」。'
-            } elseif ($exhausted) {
-                Write-Warn '本周免费额度已用完，无法进入维修会话。'
+                if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
+                    # 从管道执行（无文件路径）时无法自提升 → 只读诊断降级
+                    Write-Warn '当前以管道方式运行，无法自动提权，本次仅允许只读诊断类任务。'
+                } else {
+                    Write-Warn '维修操作需要管理员权限，正在请求提权（请在弹出的 UAC 窗口点「是」）...'
+                    try {
+                        # 自提升并传 -Elevated 标记：新进程直进维修模式，防循环
+                        Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList @(
+                            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Elevated'
+                        )
+                        exit 0    # 原低权进程退出，由提权后的新进程继续
+                    } catch {
+                        Write-Warn '用户取消了管理员授权 —— 本次仅允许只读诊断类任务。'
+                    }
+                }
+            }
+            # --- 维修模式子菜单（R33：原主菜单） ---
+            while ($true) {
+                Write-Host ""
+                Write-Host "---------------- 维修模式 ----------------" -ForegroundColor Cyan
+                if ($Script:IsAdmin) { Write-Host "  [1] 只读诊断（收集信息 + 给出建议，不改系统）"
+                    Write-Host "  [2] 维修会话（需管理员权限，已具备）" }
+                else { Write-Host "  [1] 只读诊断（收集信息 + 给出建议，不改系统）"
+                    Write-Host "  [2] 维修会话（不可用：未获得管理员权限，请退回上级菜单重选「维修模式」并同意 UAC）" -ForegroundColor DarkGray }
+                Write-Host "  [3] 余额查询"
+                Write-Host "  [0] 返回上级菜单"
+                $sub = (Read-Host '请输入编号').Trim()
+                switch ($sub) {
+                    '1' { Start-ClaudeSession -Mode 'readonly' }
+                    '2' {
+                        if (-not $Script:IsAdmin) {
+                            Write-Warn '维修会话需要管理员权限。请输入 0 返回上级菜单，重选「维修模式」并在 UAC 弹窗中点「是」。'
+                        } elseif ($exhausted) {
+                            Write-Warn '本周免费额度已用完，无法进入维修会话。'
+                            Show-UpgradeHint
+                        } else {
+                            Start-ClaudeSession -Mode 'repair'
+                        }
+                    }
+                    '3' {
+                        Write-Step '正在查询剩余额度 ...'
+                        $b = Get-Balance -Key $Script:AuthKey
+                        Write-Ok "本周剩余: $($b.remaining_weekly) token / 本月累计: $($b.total_used_monthly) / 有效期至: $($b.expires_at)"
+                        if ($b.verification_required -eq $true) { Invoke-EmailVerification -Key $Script:AuthKey | Out-Null }
+                    }
+                    '0' { break }
+                    default { Write-Warn '输入无效，请输入 0-3 的编号。' }
+                }
+            }
+        }
+        '2' {
+            # 办公助手模式（P-A A2）：无需提权；用尽则拦截，低余额仅提醒
+            if ($exhausted) {
+                Write-Warn '本周免费额度已用完，无法进入办公助手会话。'
                 Show-UpgradeHint
             } else {
-                Start-ClaudeSession -Mode 'repair'
+                if ($lowBalance) { Write-Warn "本周额度已不足 10%（剩余 $remaining token），请合理安排使用。" }
+                Start-ClaudeSession -Mode 'office'
             }
         }
         '3' {
@@ -582,7 +708,12 @@ while ($true) {
             Write-Ok "本周剩余: $($b.remaining_weekly) token / 本月累计: $($b.total_used_monthly) / 有效期至: $($b.expires_at)"
             if ($b.verification_required -eq $true) { Invoke-EmailVerification -Key $Script:AuthKey | Out-Null }
         }
-        '4' { Invoke-ExitCleanup }
-        default { Write-Warn '输入无效，请输入 1-4 的编号。' }
+        '4' {
+            if ($Script:CodexInstalled) { Start-CodexSession }
+            elseif ($Script:CodexDeclined) { Write-Warn '此盘未安装 Codex CLI（制作时未勾选）。重跑制作命令可补装。' }
+            else { Write-Warn '输入无效。' }
+        }
+        '0' { Invoke-ExitCleanup }
+        default { Write-Warn '输入无效，请输入 0-4 的编号。' }
     }
 }

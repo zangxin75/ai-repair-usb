@@ -1,7 +1,7 @@
-# usb-v1.0.ps1 版本: 1.0.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.2.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.0.0
+# 版本: 1.2.0
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
 # 兼容: PowerShell 5.1+（Win10/Win11 自带，不依赖第三方工具）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5
@@ -22,10 +22,11 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.1.0'
+$Script:ScriptVersion   = '1.2.0'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
-$Script:MinDiskGB       = 8     # 安装实际所需：Ventoy + 1.4GB 维修 ISO + ~6GB Windows ISO ≈ 8GB；不设高门槛，减少用户心智消耗
+$Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
+                                # 勾选项（Win ISO / codex / Debian）在勾选后按所选动态复查（下方「容量动态复查」段），不再抬高选盘门槛
 $Script:HttpTimeoutSec  = 30        # manifest / 小请求超时
 $Script:PortalApiBase   = 'https://tokeneff.com/api/usb'   # 制作时签发 USB token 的 portal 接口前缀（换域名改这里）
 $Script:BitsMaxRetry    = 3         # 所有网络操作统一重试次数
@@ -347,7 +348,7 @@ function Get-Component([string]$Name) {
     return $c
 }
 
-# ---------------- 3. 枚举 USB 磁盘（硬过滤系统盘/固定盘） ----------------
+# ---------------- 3. 枚举 USB 磁盘（硬过滤系统盘/固定盘；基础门槛 MinBaseGB） ----------------
 Write-Step '正在检测已插入的 U盘 ...'
 # 只取 BusType=USB 的物理磁盘 —— 硬过滤：系统盘、内置 NVMe/SATA 固定盘一律不列出（§2.5.3-2 双保险）
 $usbDisks = @(Get-Disk | Where-Object { $_.BusType -eq 'USB' })
@@ -355,14 +356,14 @@ if ($usbDisks.Count -eq 0) {
     Die '未检测到 U盘。' '请插入容量 ≥8GB 的 U盘 后重新运行本脚本。'
 }
 # 候选 = 满足容量要求的 USB 磁盘；不达标的（读卡器/加密狗等小存储）提示后忽略
-$candidates = @($usbDisks | Where-Object { $_.Size -ge ($Script:MinDiskGB * 1GB) })
-foreach ($d in ($usbDisks | Where-Object { $_.Size -lt ($Script:MinDiskGB * 1GB) })) {
+$candidates = @($usbDisks | Where-Object { $_.Size -ge ($Script:MinBaseGB * 1GB) })
+foreach ($d in ($usbDisks | Where-Object { $_.Size -lt ($Script:MinBaseGB * 1GB) })) {
     Write-Host ("  已忽略磁盘 {0}（{1}，容量不足 {2} GB，非制作目标）" -f $d.Number, $d.FriendlyName, [math]::Round($d.Size / 1GB, 1)) -ForegroundColor DarkGray
 }
 
 Write-Host ""
 if ($candidates.Count -eq 0) {
-    Die "所有 USB 磁盘容量均不足 $Script:MinDiskGB GB。" '请更换容量 ≥8GB（推荐 128GB）的 U盘 后重新运行。'
+    Die "所有 USB 磁盘容量均不足 $Script:MinBaseGB GB。" "请更换容量 ≥${Script:MinBaseGB}GB（推荐 128GB）的 U盘 后重新运行；若还要装 Windows 镜像/多个 Agent，容量越大越好。"
 } elseif ($candidates.Count -eq 1) {
     # 唯一合格 U盘 → 自动选中，免除编号输入（防误写由下方整盘清空 YES 确认兜底，§2.5.3-2）
     $targetDisk = $candidates[0]
@@ -386,8 +387,8 @@ if ($candidates.Count -eq 0) {
 }
 $sizeGB = [math]::Round($targetDisk.Size / 1GB, 1)
 
-if ($targetDisk.Size -lt ($Script:MinDiskGB * 1GB)) {
-    Die "所选 U盘 容量 ${sizeGB} GB，小于最低要求 $Script:MinDiskGB GB。" '请更换容量 ≥8GB（推荐 128GB）的 U盘 后重新运行。'
+if ($targetDisk.Size -lt ($Script:MinBaseGB * 1GB)) {
+    Die "所选 U盘 容量 ${sizeGB} GB，小于最低要求 $Script:MinBaseGB GB。" "请更换容量 ≥${Script:MinBaseGB}GB（推荐 128GB）的 U盘 后重新运行；若还要装 Windows 镜像/多个 Agent，容量越大越好。"
 }
 
 # ---------------- 4. 毁盘警告 + YES 确认 ----------------
@@ -411,6 +412,68 @@ $isoChoice = Read-Host '请选择（直接回车 = 1 推荐）'
 if ([string]::IsNullOrWhiteSpace($isoChoice)) { $isoChoice = '1' }
 $wantWin10 = ($isoChoice -in '1','3')
 $wantWin11 = ($isoChoice -in '1','2')
+
+# ---------------- 5.5 Agent / Linux 镜像勾选（P-A A4）+ 容量动态复查 ----------------
+# Codex 可用性由 manifest 驱动：清单含 codex 组件（url 非空）才列出；否则提示跳过且 agents.json 不记 codex 条目
+$codexComponent = $null
+foreach ($c in $manifest.components) { if ($c.name -eq 'codex' -and -not [string]::IsNullOrWhiteSpace($c.url)) { $codexComponent = $c; break } }
+if (-not $codexComponent) { Write-Warn 'Codex CLI 暂不可用（发布清单未提供），本次制作已跳过，不影响其他组件。' }
+
+$DebianName   = 'debian-12.8.0-amd64-netinst.iso'
+$DebianUrl    = 'https://cdimage.debian.org/cdimage/archive/12.8.0/amd64/iso-cd/debian-12.8.0-amd64-netinst.iso'   # 官方存档直链（点版本永久保留）
+$DebianSha256 = '04396d12b0f377958a070c38a923c227832fa3b3e18ddc013936ecf492e9fbb3'                                     # 官方 SHA256SUMS 钉值
+$DebianGB     = [math]::Round(0.65, 2)   # ~650MB
+
+# Windows ISO 体积估算（用于容量复查；manifest 未列 win iso —— Fido 动态解析无法预知精确值，按 ~5.6GB/个估算）
+$winIsoEstGB = 5.6
+$codexEstGB  = [math]::Round($codexComponent.sizeBytes / 1GB, 2)
+if ($codexEstGB -le 0) { $codexEstGB = 0.34 }   # 兜底估算（官方 codex.exe ~334MB）
+
+$agentSel = $null
+while ($true) {
+    Write-Host ''
+    Write-Step 'AI 引擎与扩展镜像勾选（可多选，编号用空格/逗号分隔；直接回车 = 1）'
+    Write-Host '  [1] Claude Code（维修/办公 AI 引擎，推荐）'
+    if ($codexComponent) { Write-Host "  [2] Codex CLI（OpenAI 风格命令行助手，约 ${codexEstGB}GB）" }
+    Write-Host "  [5] Linux 安装镜像 Debian 12 netinst（约 ${DebianGB}GB，装 Linux 用）"
+    $raw = Read-Host '请输入编号'
+    if ([string]::IsNullOrWhiteSpace($raw)) { $raw = '1' }
+    # 中文逗号/空格分隔 → 去重；只接受当前可选项（1 / 2(仅可用时) / 5）
+    $valid = @('1','5'); if ($codexComponent) { $valid += '2' }
+    $picks = @($raw -split '[，, ]+' | Where-Object { $_ } | Select-Object -Unique)
+    $bad = @($picks | Where-Object { $_ -notin $valid })
+    if ($bad.Count -gt 0) {
+        Write-Warn "无效编号: $($bad -join ' ')（可选: $($valid -join ' / ')），请重新输入。"
+        continue
+    }
+    $agentSel = $picks
+    $wantClaude = ($agentSel -contains '1')
+    $wantCodex  = ($agentSel -contains '2')
+    $wantDebian = ($agentSel -contains '5')
+
+    # —— 容量动态复查（P-A A4 第二段）：MinBaseGB + WinISO + Σ勾选项 ——
+    $needGB = [double]$Script:MinBaseGB
+    if ($wantWin10) { $needGB += $winIsoEstGB }
+    if ($wantWin11) { $needGB += $winIsoEstGB }
+    if ($wantCodex)  { $needGB += $codexEstGB }
+    if ($wantDebian) { $needGB += $DebianGB }
+    $needGB = [math]::Round($needGB, 1)
+    if ($needGB -le $sizeGB) { break }
+
+    # 不足 → 打印「建议取消项」（优先 Debian → Win ISO → codex），允许 继续/重选/退出
+    Write-Warn "勾选后预计需要约 ${needGB}GB，所选 U盘（${sizeGB} GB）可能不足。建议取消（按优先级）："
+    $tips = @()
+    if ($wantDebian) { $tips += "取消 [5] Debian 12（省 ${DebianGB}GB）" }
+    if ($wantWin10 -and $wantWin11) { $tips += "Windows 镜像只保留一个（省约 ${winIsoEstGB}GB）" }
+    elseif ($wantWin10 -or $wantWin11) { $tips += "取消 Windows 镜像（省约 ${winIsoEstGB}GB）" }
+    if ($wantCodex) { $tips += "取消 [2] Codex CLI（省 ${codexEstGB}GB）" }
+    $tips | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+    $rc = (Read-Host '输入 C 继续（空间不足风险自负）/ R 重新勾选 / 其他任意键退出').Trim().ToUpper()
+    if ($rc -eq 'C') { break }
+    if ($rc -ne 'R') { Write-Host '已取消，未对 U盘 做任何修改。'; exit 0 }
+    # R → 回到勾选循环
+}
+Write-Ok "勾选结果: Claude Code = $(if($wantClaude){'装'}else{'不装'}) / Codex = $(if($wantCodex){'装'}else{'不装'})$(if($codexComponent){''}else{'（不可用）'}) / Debian 12 = $(if($wantDebian){'装'}else{'不装'})"
 
 # ---------------- 6. 准备工作目录并下载自产组件 ----------------
 Write-Step '开始下载组件（支持断点续传 + 实时进度）...'
@@ -455,37 +518,76 @@ foreach ($name in $selfMadeNames) {
 
 # ---------------- 6.5 场景③便携运行时：claude.exe + MinGit（可选组件，失败不阻断） ----------------
 # U盘 bin\ 内置后，任意 Windows 双击 repair-on-windows.bat 免安装直跑；
-# 任一下载失败只警告：双击入口自动回落在线安装（方案 5.3 降级链不变）
+# 任一下载失败只警告：双击入口自动回落在线安装（方案 5.3 降级链不变）。
+# P-A A4：按勾选裁剪——claude 仅 [1] 勾选时下载；PortableGit 为 [1][2] 共用，任一勾选即安装
 $Script:ClaudeExeLocal  = $null
 $Script:ClaudeExeSha256 = ''
 $MinGitLocal = $null
-try {
-    $claudeVer = (Get-WebTextWithRetry -Url "$($Script:ClaudeGcsBase)/stable" -TimeoutSec $Script:HttpTimeoutSec).Trim()
-    $cm = (Get-WebTextWithRetry -Url "$($Script:ClaudeGcsBase)/$claudeVer/manifest.json" -TimeoutSec $Script:HttpTimeoutSec) | ConvertFrom-Json
-    $Script:ClaudeExeSha256 = $cm.platforms.'win32-x64'.checksum
-    if ([string]::IsNullOrWhiteSpace($Script:ClaudeExeSha256)) { throw 'manifest 缺少 win32-x64 checksum' }
-    $claudeDir = Join-Path $Script:WorkDir 'portable-bin'
-    New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
-    Write-Host "  便携版 claude $claudeVer（win32-x64，约 236MB）..."
-    $Script:ClaudeExeLocal = Join-Path $claudeDir 'claude.exe'
-    Get-FileViaBits -Url "$($Script:ClaudeGcsBase)/$claudeVer/win32-x64/claude.exe" -Dest $Script:ClaudeExeLocal -DisplayName "claude-portable ($claudeVer)"
-    Test-FileSha256 -Path $Script:ClaudeExeLocal -Expected $Script:ClaudeExeSha256 -DisplayName "claude.exe ($claudeVer)"
-    Write-Ok "便携版 claude.exe 就绪（$claudeVer，官方 sha256 校验通过）"
-} catch {
-    Write-Warn "便携版 claude.exe 获取失败（$($_.Exception.Message)）。不阻断制作——场景③双击入口将回落为在线安装。"
-    $Script:ClaudeExeLocal = $null
+if ($wantClaude) {
+    try {
+        $claudeVer = (Get-WebTextWithRetry -Url "$($Script:ClaudeGcsBase)/stable" -TimeoutSec $Script:HttpTimeoutSec).Trim()
+        $cm = (Get-WebTextWithRetry -Url "$($Script:ClaudeGcsBase)/$claudeVer/manifest.json" -TimeoutSec $Script:HttpTimeoutSec) | ConvertFrom-Json
+        $Script:ClaudeExeSha256 = $cm.platforms.'win32-x64'.checksum
+        if ([string]::IsNullOrWhiteSpace($Script:ClaudeExeSha256)) { throw 'manifest 缺少 win32-x64 checksum' }
+        $claudeDir = Join-Path $Script:WorkDir 'portable-bin'
+        New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+        Write-Host "  便携版 claude $claudeVer（win32-x64，约 236MB）..."
+        $Script:ClaudeExeLocal = Join-Path $claudeDir 'claude.exe'
+        Get-FileViaBits -Url "$($Script:ClaudeGcsBase)/$claudeVer/win32-x64/claude.exe" -Dest $Script:ClaudeExeLocal -DisplayName "claude-portable ($claudeVer)"
+        Test-FileSha256 -Path $Script:ClaudeExeLocal -Expected $Script:ClaudeExeSha256 -DisplayName "claude.exe ($claudeVer)"
+        Write-Ok "便携版 claude.exe 就绪（$claudeVer，官方 sha256 校验通过）"
+    } catch {
+        Write-Warn "便携版 claude.exe 获取失败（$($_.Exception.Message)）。不阻断制作——场景③双击入口将回落为在线安装。"
+        $Script:ClaudeExeLocal = $null
+    }
+} else {
+    Write-Host '  未勾选 Claude Code，跳过 claude.exe 下载。'
 }
-try {
-    $pgDir = Join-Path $Script:WorkDir 'portable-bin'
-    New-Item -ItemType Directory -Force -Path $pgDir | Out-Null
-    Write-Host '  便携 Git（Bash 工具依赖，约 154MB）...'
-    $MinGitLocal = Join-Path $pgDir 'PortableGit.zip'
-    Get-FileViaBits -Url $Script:PortableGitUrl -Dest $MinGitLocal -DisplayName 'PortableGit-2.56.0.2-64-bit.zip'
-    Test-FileSha256 -Path $MinGitLocal -Expected $Script:PortableGitSha256 -DisplayName 'PortableGit-2.56.0.2-64-bit.zip'
-    Write-Ok '便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）'
-} catch {
-    Write-Warn "便携 Git 获取失败（$($_.Exception.Message)）。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
-    $MinGitLocal = $null
+if ($wantClaude -or $wantCodex) {
+    try {
+        $pgDir = Join-Path $Script:WorkDir 'portable-bin'
+        New-Item -ItemType Directory -Force -Path $pgDir | Out-Null
+        Write-Host '  便携 Git（Bash 工具依赖，约 154MB）...'
+        $MinGitLocal = Join-Path $pgDir 'PortableGit.zip'
+        Get-FileViaBits -Url $Script:PortableGitUrl -Dest $MinGitLocal -DisplayName 'PortableGit-2.56.0.2-64-bit.zip'
+        Test-FileSha256 -Path $MinGitLocal -Expected $Script:PortableGitSha256 -DisplayName 'PortableGit-2.56.0.2-64-bit.zip'
+        Write-Ok '便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）'
+    } catch {
+        Write-Warn "便携 Git 获取失败（$($_.Exception.Message)）。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+        $MinGitLocal = $null
+    }
+} else {
+    Write-Host '  未勾选任何 AI 引擎，跳过便携 Git 下载。'
+}
+
+# ---------------- 6.6 Codex CLI（P-A A4：勾选了 codex 才走；失败降级 installed=false） ----------------
+$Script:CodexExeLocal = $null
+if ($wantCodex -and $codexComponent) {
+    try {
+        Write-Host "  Codex CLI $($codexComponent.version)（约 $($codexComponent.sizeBytes / 1MB)MB）..."
+        $Script:CodexExeLocal = Join-Path $Script:WorkDir $codexComponent.filename
+        Get-FileViaBits -Url $codexComponent.url -Dest $Script:CodexExeLocal -DisplayName "$($codexComponent.name) ($($codexComponent.filename))"
+        Test-FileSha256 -Path $Script:CodexExeLocal -Expected $codexComponent.sha256 -DisplayName $codexComponent.filename
+        Write-Ok 'Codex CLI 就绪（发布侧 sha256 校验通过）'
+    } catch {
+        Write-Warn "Codex CLI 下载/校验失败（$($_.Exception.Message)）。不阻断制作——盘上将不装 Codex，启动器不显示其入口。"
+        $Script:CodexExeLocal = $null
+    }
+}
+
+# ---------------- 6.7 Debian 12 netinst（P-A A4：勾选了 Debian 才走；官方直链 + 官方钉值） ----------------
+$DebianIsoLocal = $null
+if ($wantDebian) {
+    try {
+        Write-Host "  Debian 12 netinst（$DebianName，官方 cdimage 存档直链，约 650MB）..."
+        $DebianIsoLocal = Join-Path $Script:WorkDir $DebianName
+        Get-FileViaBits -Url $DebianUrl -Dest $DebianIsoLocal -DisplayName $DebianName
+        Test-FileSha256 -Path $DebianIsoLocal -Expected $DebianSha256 -DisplayName $DebianName
+        Write-Ok 'Debian 12 netinst 就绪（官方 SHA256SUMS 钉值校验通过）'
+    } catch {
+        Write-Warn "Debian 12 镜像下载/校验失败（$($_.Exception.Message)）。不阻断制作——盘上将无 Linux 安装镜像。"
+        $DebianIsoLocal = $null
+    }
 }
 
 # ---------------- 7. Win10/Win11 ISO：Fido 式官方动态解析 ----------------
@@ -629,8 +731,23 @@ foreach ($name in $selfMadeNames) {
 }
 foreach ($k in $winIsoLocal.Keys) { Copy-FileWithProgress $winIsoLocal[$k] (Join-Path $root 'ISO') }
 
+# Debian 12 netinst（P-A A4：勾选且下载成功才拷入）
+if ($DebianIsoLocal -and (Test-Path $DebianIsoLocal)) {
+    Copy-FileWithProgress $DebianIsoLocal (Join-Path $root 'ISO')
+    Write-Ok "已放入 Linux 安装镜像: $DebianName"
+}
+
 # ventoy.json：默认启动 AI-Repair-Live、菜单超时 3 秒、中文菜单别名（与 make-usb.sh 生成逻辑一致）
 $liveFile = (Get-Component 'ai-repair-live').filename
+# P-A A4：勾选 Debian 时增 "/ISO/<debian>" => "安装 Debian 12" 别名分支
+$aliasList = @(
+    @{ image = "/ISO/$liveFile"; alias = 'AI 电脑维修助手（推荐）' }
+    @{ image = '/ISO/WinPE_x64.iso'; alias = 'WinPE 装机维护环境' }
+    @{ image = '/ISO/MemTest86+.iso'; alias = 'MemTest86+ 内存检测' }
+)
+if ($DebianIsoLocal -and (Test-Path $DebianIsoLocal)) {
+    $aliasList += @{ image = "/ISO/$DebianName"; alias = '安装 Debian 12' }
+}
 $ventoyJson = @{
     control = @(
         @{ VTOY_DEFAULT_MENU_MODE = '0' }
@@ -638,11 +755,7 @@ $ventoyJson = @{
         @{ VTOY_MENU_LANGUAGE = 'zh_CN' }   # 启动菜单默认中文；菜单界面按 L 键可随时切换中/英文
         @{ VTOY_DEFAULT_IMAGE = "/ISO/$liveFile" }
     )
-    boot_menu_alias = @(
-        @{ image = "/ISO/$liveFile"; alias = 'AI 电脑维修助手（推荐）' }
-        @{ image = '/ISO/WinPE_x64.iso'; alias = 'WinPE 装机维护环境' }
-        @{ image = '/ISO/MemTest86+.iso'; alias = 'MemTest86+ 内存检测' }
-    )
+    boot_menu_alias = $aliasList
 } | ConvertTo-Json -Depth 5
 Set-Content -Path (Join-Path $root 'ventoy\ventoy.json') -Value $ventoyJson -Encoding UTF8
 
@@ -655,7 +768,8 @@ AI 电脑维修 U盘 配置目录
 
 # 场景③ Windows 在线维修双击入口（repair-on-windows.bat/.ps1，与制作脚本同源同目录；
 # WebClient 二进制下载，避免 Set-Content 给 bat 写入 BOM 导致 @echo off 失效）
-foreach ($f in @('repair-on-windows.bat', 'repair-on-windows.ps1')) {
+# P-A A4：双入口投放（repair-on-windows.bat 与 AI-Workstation.bat 同内容，设计 §9-3）
+foreach ($f in @('repair-on-windows.bat', 'repair-on-windows.ps1', 'AI-Workstation.bat')) {
     try {
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add('User-Agent', "ai-repair-usb-maker/$Script:ScriptVersion")
@@ -679,8 +793,78 @@ if ($MinGitLocal -and (Test-Path $MinGitLocal)) {
     Write-Ok '便携 Git 已解压到 U盘 bin\PortableGit'
 }
 
+# 办公助手人格（P-A A2/A4）：config\office\CLAUDE.md（勾选了 claude 才投放）
+if ($wantClaude) {
+    try {
+        $officeDir = Join-Path $root 'config\office'
+        New-Item -ItemType Directory -Force -Path $officeDir | Out-Null
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add('User-Agent', "ai-repair-usb-maker/$Script:ScriptVersion")
+        $wc.DownloadFile('https://usb.tokeneff.com/maker/office-CLAUDE.md', (Join-Path $officeDir 'CLAUDE.md'))
+        Write-Ok '已放入: config\office\CLAUDE.md（办公助手人格）'
+    } catch { Write-Warn "office-CLAUDE.md 获取失败（$($_.Exception.Message)）。不影响制作——办公模式将以通用模式启动。" }
+}
+
+# Codex CLI 落盘（P-A A3/A4：bin\codex.exe + config\codex\config.toml）
+$codexInstalledFinal = $false
+if ($Script:CodexExeLocal -and (Test-Path $Script:CodexExeLocal)) {
+    try {
+        New-Item -ItemType Directory -Force -Path (Join-Path $root 'bin') | Out-Null
+        Copy-FileWithProgress $Script:CodexExeLocal (Join-Path $root 'bin')
+        $codexCfgDir = Join-Path $root 'config\codex'
+        New-Item -ItemType Directory -Force -Path $codexCfgDir | Out-Null
+        $configToml = @'
+# Codex CLI 配置（制作器生成；AI 维修U盘 P-A）
+model_provider = "tokeneff"
+model = "glm-5.2"
+
+[model_providers.tokeneff]
+name = "tokeneff gateway"
+base_url = "https://tokeneff.com/v1"
+env_key = "TOKENEFF_API_KEY"
+wire_api = "responses"
+'@
+        [IO.File]::WriteAllText((Join-Path $codexCfgDir 'config.toml'), $configToml)
+        $codexInstalledFinal = $true
+        Write-Ok '已放入: bin\codex.exe + config\codex\config.toml'
+    } catch {
+        Write-Warn "Codex 落盘失败（$($_.Exception.Message)）。不阻断制作——启动器将不显示 Codex 入口。"
+        $codexInstalledFinal = $false
+    }
+}
+
 # 制作时签发 USB token（可选步骤：邮箱验证 → 写 config\auth_token；可跳过，失败不阻塞）
 Initialize-UsbToken -Root $root
+
+# agents.json / isos.json（P-A A4：挂载后生成，启动器据此显隐入口）
+# 语义（与设计 §4.0 对齐）：
+#   installed=true                          → 启动器列出并启动
+#   userDeclined=true（制作时明确不装）      → 启动器灰色行「未安装，可补装」
+#   installed=false 且 userDeclined=false   → 下载失败降级，启动器隐藏（claude 则回落在线安装）
+$agentsObj = [ordered]@{}
+$agentsObj['claude'] = [ordered]@{
+    installed    = [bool]($Script:ClaudeExeLocal -and (Test-Path $Script:ClaudeExeLocal))
+    userDeclined = (-not $wantClaude)
+}
+if ($codexComponent) {
+    $agentsObj['codex'] = [ordered]@{
+        installed    = $codexInstalledFinal
+        userDeclined = (-not $wantCodex)
+    }
+}
+$isosObj = [ordered]@{}
+if ($DebianIsoLocal -and (Test-Path $DebianIsoLocal)) {
+    $isosObj['debian'] = [ordered]@{
+        filename = $DebianName
+        sha256   = $DebianSha256
+        source   = $DebianUrl
+    }
+}
+try {
+    [IO.File]::WriteAllText((Join-Path $root 'config\agents.json'), ($agentsObj | ConvertTo-Json -Depth 4))
+    [IO.File]::WriteAllText((Join-Path $root 'config\isos.json'), ($isosObj | ConvertTo-Json -Depth 4))
+    Write-Ok '已写入: config\agents.json + config\isos.json（AI 引擎勾选记录）'
+} catch { Write-Warn "agents.json/isos.json 写入失败（$($_.Exception.Message)）。不影响启动，但启动器菜单将不显示 Codex 项。" }
 
 Write-Ok '镜像与配置拷入完成'
 
@@ -700,6 +884,15 @@ foreach ($k in $winIsoLocal.Keys) {
 if ($Script:ClaudeExeLocal -and (Test-Path (Join-Path $root 'bin\claude.exe'))) {
     Test-FileSha256 -Path (Join-Path $root 'bin\claude.exe') -Expected $Script:ClaudeExeSha256 -DisplayName 'bin\claude.exe'
 }
+# Codex 盘上复核（P-A A4：勾选且已落盘才校验；未勾选不得因缺失报错）
+if ($codexInstalledFinal) {
+    Test-FileSha256 -Path (Join-Path $root 'bin\codex.exe') -Expected $codexComponent.sha256 -DisplayName 'bin\codex.exe'
+    if (-not (Test-Path (Join-Path $root 'config\codex\config.toml'))) { Die 'config\codex\config.toml 缺失。' '请重新运行制作器。' }
+}
+# Debian 盘上复核（P-A A4：勾选且已拷入才校验）
+if ($DebianIsoLocal -and (Test-Path (Join-Path $root ('ISO\' + $DebianName)))) {
+    Test-FileSha256 -Path (Join-Path $root ('ISO\' + $DebianName)) -Expected $DebianSha256 -DisplayName $DebianName
+}
 
 # ---------------- 11. 完成 ----------------
 Write-Host ""
@@ -708,12 +901,16 @@ Write-Host '  制作完成，可以拔下使用了！' -ForegroundColor Green
 Write-Host '===============================================' -ForegroundColor Green
 Write-Host ''
 Write-Host '使用方法: 将 U盘 插入需要维修的电脑 → 开机按启动菜单键(F12/F9/Esc) → 选择 U盘 启动'
-if (Test-Path (Join-Path $root 'repair-on-windows.bat')) {
+if (Test-Path (Join-Path $root 'AI-Workstation.bat')) {
     if (Test-Path (Join-Path $root 'bin\claude.exe')) {
-        Write-Host '电脑还能进 Windows 时: 双击 U盘 根目录 repair-on-windows.bat，即可在 Windows 内在线维修（免安装直跑，无需重启）'
+        Write-Host '电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在 Windows 内维修 / 办公助手（免安装直跑，无需重启）'
     } else {
-        Write-Host '电脑还能进 Windows 时: 双击 U盘 根目录 repair-on-windows.bat，即可在 Windows 内在线维修（首次将在线安装 claude）'
+        Write-Host '电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在线维修（首次将在线安装 claude）'
     }
+    if ($codexInstalledFinal) { Write-Host '模式菜单内可用 Codex CLI（OpenAI 风格命令行助手）' }
+}
+if ($DebianIsoLocal -and (Test-Path (Join-Path $root ('ISO\' + $DebianName)))) {
+    Write-Host '已附带 Debian 12 netinst: U盘 启动菜单选择「安装 Debian 12」即可装 Linux'
 }
 if ($wantWin10 -or $wantWin11) {
     if ($winIsoLocal.Count -lt ([int]$wantWin10 + [int]$wantWin11)) {
