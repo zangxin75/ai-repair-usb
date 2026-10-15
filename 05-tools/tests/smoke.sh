@@ -212,7 +212,7 @@ grep -q '安装 Debian 12' "$MAKER/usb-v1.0.sh" || { S67=0; bad "usb-v1.0.sh ven
 
 # ───────────────────────── 第 7 节：P-B 产物断言（多Agent工作站 P-B：OpenClaw/Pi/Node） ─────────────────────────
 
-# 检查 7-1：manifest 1.0.5 含 node/openclaw/pi 组件（url + sha256 非空，供应链钉值）
+# 检查 7-1：manifest 1.0.6 含 node/openclaw/pi 组件（url + sha256 非空，供应链钉值）
 S71=1
 for comp in node openclaw pi; do
   python3 - "$MAKER/manifest.json" "$comp" <<'PYCHK' || { S71=0; bad "manifest.json 组件 $comp 缺失或未钉 sha256"; }
@@ -224,8 +224,8 @@ for c in m['components']:
 sys.exit(1)
 PYCHK
 done
-grep -q '"version": "1.0.5"' "$MAKER/manifest.json" || { S71=0; bad "manifest 版本应为 1.0.5"; }
-[[ $S71 -eq 1 ]] && ok "manifest 1.0.5：node/openclaw/pi 组件已钉 url+sha256"
+grep -q '"version": "1.0.6"' "$MAKER/manifest.json" || { S71=0; bad "manifest 版本应为 1.0.6"; }
+[[ $S71 -eq 1 ]] && ok "manifest 1.0.6：node/openclaw/pi 组件已钉 url+sha256"
 
 # 检查 7-2：两制作器含 OpenClaw/Pi 勾选 + Node 运行时处理 + 预装包下载段
 S72=1
@@ -247,17 +247,20 @@ grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启�
 grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
 [[ $S73 -eq 1 ]] && ok "启动器 0.4.0：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
 
-# 检查 7-4：制作器版本 1.3.1
-grep -q "ScriptVersion   = '1.3.1'" "$MAKER/usb-v1.0.ps1" && grep -q 'SCRIPT_VERSION="1.3.1"' "$MAKER/usb-v1.0.sh" \
-  && ok "两制作器版本 1.3.1（P-B + 进度心跳）" || bad "制作器版本号未升至 1.3.1"
+# 检查 7-4：制作器版本 1.3.4
+grep -q "ScriptVersion   = '1.3.4'" "$MAKER/usb-v1.0.ps1" && grep -q 'SCRIPT_VERSION="1.3.4"' "$MAKER/usb-v1.0.sh" \
+  && ok "两制作器版本 1.3.4（P-B + 进度心跳 + 解压容错 + 进度条修复）" || bad "制作器版本号未升至 1.3.4"
 
-# 检查 7-5：解压进度心跳（1.3.1，exFAT 小文件解压防「假死」观感）
+# 检查 7-5：解压进度心跳 + exFAT 容错（1.3.2）
 S75=1
 grep -q 'Expand-WithProgress' "$MAKER/usb-v1.0.ps1" || { S75=0; bad "usb-v1.0.ps1 缺 Expand-WithProgress"; }
 grep -q 'Write-Progress' "$MAKER/usb-v1.0.ps1" || { S75=0; bad "usb-v1.0.ps1 缺 Write-Progress"; }
 grep -q 'extract_progress' "$MAKER/usb-v1.0.sh" || { S75=0; bad "usb-v1.0.sh 缺 extract_progress"; }
 [ "$(grep -c 'Expand-Archive -Path' "$MAKER/usb-v1.0.ps1")" -le 1 ] || { S75=0; bad "ps1 仍有无进度 Expand-Archive 直调残留（仅允许 helper 回退分支 1 处）"; }
-[[ $S75 -eq 1 ]] && ok "两制作器：解压进度心跳（tar.exe 加速 + Write-Progress / du 轮询）"
+# 1.3.4：脚本头全局 SilentlyContinue 会压制 Write-Progress → helper 内必须临时恢复并还原
+grep -q "\$ProgressPreference = 'Continue'" "$MAKER/usb-v1.0.ps1" || { S75=0; bad "ps1 Expand-WithProgress 未恢复 ProgressPreference（进度条被全局静默压制）"; }
+grep -q '\$ProgressPreference = \$prevProgress' "$MAKER/usb-v1.0.ps1" || { S75=0; bad "ps1 Expand-WithProgress 未还原 ProgressPreference（会拖慢后续 BITS 下载）"; }
+[[ $S75 -eq 1 ]] && ok "两制作器：解压进度心跳 + 容错（tar.exe/Write-Progress、du 轮询、入口判定）"
 
 echo
 echo "=== 结果：通过 $PASS 项 / 失败 $FAIL 项 ==="

@@ -1,4 +1,4 @@
-# usb-v1.0.ps1 版本: 1.3.3  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.4  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
 # 版本: 1.3.2（1.3.2：tar 解压容错——exFAT 上链接条目报错时成败改由入口文件判定，配 manifest 1.0.6 硬链烤平重打包）
@@ -22,7 +22,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.3'
+$Script:ScriptVersion   = '1.3.4'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -188,6 +188,9 @@ function Copy-FileWithProgress([string]$Path, [string]$DestDir) {
 # 进度：zip 从中央目录预读解压总量 → 真百分比；tar.gz 只报「已解压 MB + 耗时」心跳。
 function Expand-WithProgress {
     param([string]$Archive, [string]$DestDir, [string]$Label, [switch]$TarOnly, [switch]$Lenient)
+    # 解压进度条需要 Write-Progress；脚本头部为 BITS 提速全局关了它 → 本函数内临时恢复
+    $prevProgress = $ProgressPreference
+    $ProgressPreference = 'Continue'
     $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
     $expected = 0L
     if ($Archive -like '*.zip') {
@@ -218,7 +221,7 @@ function Expand-WithProgress {
                 if ($Lenient) { Write-Warn "tar.exe 退出码 $($p.ExitCode)（解压 $Label 有个别条目失败；成败由后续入口存在性判定）" }
                 else { throw "tar.exe 退出码 $($p.ExitCode)（解压 $Label 失败）" }
             }
-        } finally { Write-Progress -Activity "解压 $Label" -Completed }
+        } finally { Write-Progress -Activity "解压 $Label" -Completed; $ProgressPreference = $prevProgress }
     } elseif (-not $TarOnly) {
         # 回退：Expand-Archive 后台作业 + 同款心跳
         $job = Start-Job -ScriptBlock { param($a, $d) Expand-Archive -Path $a -DestinationPath $d -Force } -ArgumentList $Archive, $DestDir
@@ -235,7 +238,7 @@ function Expand-WithProgress {
             }
             $null = $job | Receive-Job
             if ($job.State -eq 'Failed') { throw "Expand-Archive 失败（解压 $Label）: $($job.ChildJobs[0].JobStateInfo.Reason.Message)" }
-        } finally { Remove-Job $job -Force -ErrorAction SilentlyContinue; Write-Progress -Activity "解压 $Label" -Completed }
+        } finally { Remove-Job $job -Force -ErrorAction SilentlyContinue; Write-Progress -Activity "解压 $Label" -Completed; $ProgressPreference = $prevProgress }
     } else {
         throw '系统缺少 tar.exe（需 Win10 1803+），无法解包 tar.gz'
     }
