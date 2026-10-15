@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.3.1  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.3.2  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.1（1.3.1：解压加 extract_progress 心跳，exFAT 慢时防「假死」观感）
+# 版本: 1.3.2（1.3.2：tar 解压容错——exFAT 上链接条目报错时成败改由入口文件判定，配 manifest 1.0.6 硬链烤平重打包）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
 #
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.3.1"
+SCRIPT_VERSION="1.3.2"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -726,8 +726,9 @@ if [ -n "$OC_TAR" ]; then
     rm -rf "$MNT/bin/openclaw"; mkdir -p "$MNT/bin/openclaw"
     echo "    解包 OpenClaw 预装包 ..."
     # tar 内为 node_modules/ 顶层；预装包已 --dereference 烤平符号链接（exFAT 兼容）
-    if extract_progress "OpenClaw" "$MNT/bin/openclaw" tar -xzf "$OC_TAR" -C "$MNT/bin/openclaw" \
-        && [ -f "$MNT/bin/openclaw/node_modules/openclaw/openclaw.mjs" ]; then
+    # tar 在 exFAT 上可能因个别链接条目报非零（无害内容），成败以入口文件存在性为准
+    extract_progress "OpenClaw" "$MNT/bin/openclaw" tar -xzf "$OC_TAR" -C "$MNT/bin/openclaw" || true
+    if [ -f "$MNT/bin/openclaw/node_modules/openclaw/openclaw.mjs" ]; then
         OC_INSTALLED=1
         c_ok "已解包: bin/openclaw/（入口 node_modules/openclaw/openclaw.mjs）"
     else
@@ -738,8 +739,8 @@ fi
 if [ -n "$PI_TAR" ]; then
     rm -rf "$MNT/bin/pi"; mkdir -p "$MNT/bin/pi"
     echo "    解包 Pi 预装包 ..."
-    if extract_progress "Pi" "$MNT/bin/pi" tar -xzf "$PI_TAR" -C "$MNT/bin/pi" \
-        && [ -f "$MNT/bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ]; then
+    extract_progress "Pi" "$MNT/bin/pi" tar -xzf "$PI_TAR" -C "$MNT/bin/pi" || true
+    if [ -f "$MNT/bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ]; then
         PI_INSTALLED=1
         c_ok "已解包: bin/pi/（入口 node_modules/@mariozechner/pi-coding-agent/dist/cli.js）"
     else

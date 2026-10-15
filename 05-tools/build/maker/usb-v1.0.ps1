@@ -1,7 +1,7 @@
-# usb-v1.0.ps1 版本: 1.3.1  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.2  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.1（P-B：+OpenClaw/Pi/便携 Node 勾选；1.3.1：解压改 tar.exe + Write-Progress 进度心跳，防「假死」观感）
+# 版本: 1.3.2（1.3.2：tar 解压容错——exFAT 上链接条目报错时成败改由入口文件判定，配 manifest 1.0.6 硬链烤平重打包）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
 # 兼容: PowerShell 5.1+（Win10/Win11 自带，不依赖第三方工具）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5
@@ -22,7 +22,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.1'
+$Script:ScriptVersion   = '1.3.2'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -187,7 +187,7 @@ function Copy-FileWithProgress([string]$Path, [string]$DestDir) {
 # tar.gz 必须 tar.exe（-TarOnly，Expand-Archive 不认 tar.gz）；zip 无 tar.exe 时回退后台作业。
 # 进度：zip 从中央目录预读解压总量 → 真百分比；tar.gz 只报「已解压 MB + 耗时」心跳。
 function Expand-WithProgress {
-    param([string]$Archive, [string]$DestDir, [string]$Label, [switch]$TarOnly)
+    param([string]$Archive, [string]$DestDir, [string]$Label, [switch]$TarOnly, [switch]$Lenient)
     $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
     $expected = 0L
     if ($Archive -like '*.zip') {
@@ -214,7 +214,10 @@ function Expand-WithProgress {
                 }
                 Start-Sleep -Seconds 2
             }
-            if ($p.ExitCode -ne 0) { throw "tar.exe 退出码 $($p.ExitCode)（解压 $Label 失败）" }
+            if ($p.ExitCode -ne 0) {
+                if ($Lenient) { Write-Warn "tar.exe 退出码 $($p.ExitCode)（解压 $Label 有个别条目失败；成败由后续入口存在性判定）" }
+                else { throw "tar.exe 退出码 $($p.ExitCode)（解压 $Label 失败）" }
+            }
         } finally { Write-Progress -Activity "解压 $Label" -Completed }
     } elseif (-not $TarOnly) {
         # 回退：Expand-Archive 后台作业 + 同款心跳
@@ -999,7 +1002,7 @@ if ($Script:OpenclawTarLocal -and (Test-Path $Script:OpenclawTarLocal) -and $hav
         New-Item -ItemType Directory -Force -Path $ocDir | Out-Null
         Write-Host '  解包 OpenClaw 预装包 ...'
         # tar 内为 node_modules\ 顶层；exFAT 无 symlink，预装包已 --dereference 烤平
-        Expand-WithProgress -Archive $Script:OpenclawTarLocal -DestDir $ocDir -Label 'OpenClaw' -TarOnly
+        Expand-WithProgress -Archive $Script:OpenclawTarLocal -DestDir $ocDir -Label 'OpenClaw' -TarOnly -Lenient
         if (-not (Test-Path (Join-Path $ocDir 'node_modules\openclaw\openclaw.mjs'))) { throw '入口 node_modules\openclaw\openclaw.mjs 缺失' }
         $openclawInstalledFinal = $true
         Write-Ok '已解包: bin\openclaw\（OpenClaw，入口 node_modules\openclaw\openclaw.mjs）'
@@ -1014,7 +1017,7 @@ if ($Script:PiTarLocal -and (Test-Path $Script:PiTarLocal) -and $haveTar) {
         if (Test-Path $piDir) { Remove-Item -Recurse -Force $piDir }
         New-Item -ItemType Directory -Force -Path $piDir | Out-Null
         Write-Host '  解包 Pi 预装包 ...'
-        Expand-WithProgress -Archive $Script:PiTarLocal -DestDir $piDir -Label 'Pi' -TarOnly
+        Expand-WithProgress -Archive $Script:PiTarLocal -DestDir $piDir -Label 'Pi' -TarOnly -Lenient
         if (-not (Test-Path (Join-Path $piDir 'node_modules\@mariozechner\pi-coding-agent\dist\cli.js'))) { throw '入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js 缺失' }
         $piInstalledFinal = $true
         Write-Ok '已解包: bin\pi\（Pi，入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js）'

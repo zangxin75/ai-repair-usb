@@ -1,6 +1,6 @@
 {
   "_comment": "AI 电脑维修 U盘 一键制作器 · 组件清单（S5 web 首次制作流程定稿版）。发布流程每次发布重写本文件；安装器启动时总是拉取最新 manifest —— 组件升级 = 改本文件，无需改安装器（方案 §2.5.4）。托管: usb.tokeneff.com/maker/（与主站分域，故障隔离）。v0.1 阶段 ventoy/winpe/memtest 仍为占位（K0 实测/P4.5 构建后填充），ai-repair-live 为真实可下载产物。",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "generated": "2026-10-15T16:10:00+08:00",
   "components": [
     {
@@ -72,21 +72,21 @@
       "name": "openclaw",
       "filename": "openclaw-2026.10.3.tar.gz",
       "url": "https://usb.tokeneff.com/downloads/openclaw-2026.10.3.tar.gz",
-      "sizeBytes": 162005320,
-      "sha256": "9a565f6be5f4d05ed0dc0996fceea28c6ca6fb647d34aae7048ba1669f1e24d8",
+      "sizeBytes": 162046273,
+      "sha256": "ad4b4bee1c55ffcd26eac9be784639f85190389e01b76372d57c5c4fc6ca84a4",
       "required": false,
       "version": "2026.10.3",
-      "notes": "OpenClaw v2026.10.3 自包含 node_modules 预装包（npm 官方源 --os=win32 --cpu=x64 --omit=dev --ignore-scripts 安装，win32 原生二进制已含：koffi/node-pty/esbuild 等；--dereference 打包烤平 .bin 符号链接以兼容 exFAT）。解到 U盘 bin\\openclaw\\，入口 node_modules\\openclaw\\openclaw.mjs。来源: https://www.npmjs.com/package/openclaw"
+      "notes": "OpenClaw v2026.10.3 自包含 node_modules 预装包（npm 官方源 --os=win32 --cpu=x64 --omit=dev --ignore-scripts 安装，win32 原生二进制已含：koffi/node-pty/esbuild 等；--dereference --hard-dereference 打包烤平符号/硬链接以兼容 exFAT——1.0.6 修正：仅 --dereference 残留 npm 内部 34 个硬链，Windows tar.exe 在 exFAT 建 hardlink 报 Invalid argument）。解到 U盘 bin\\openclaw\\，入口 node_modules\\openclaw\\openclaw.mjs。来源: https://www.npmjs.com/package/openclaw"
     },
     {
       "name": "pi",
       "filename": "pi-0.73.1.tar.gz",
       "url": "https://usb.tokeneff.com/downloads/pi-0.73.1.tar.gz",
-      "sizeBytes": 33855114,
-      "sha256": "b8c04c7e2d8ea01af99886aca454135aaa16a6efb45ce8c7af9ff1cbc6b3b25c",
+      "sizeBytes": 33851368,
+      "sha256": "22fc0a01349230a214237d75581c8a84f4a583f2c96d779c29a1cbcbe04ad797",
       "required": false,
       "version": "0.73.1",
-      "notes": "Pi 编码 agent（@mariozechner/pi-coding-agent v0.73.1）自包含 node_modules 预装包（同 openclaw 打包策略，--os=win32 --cpu=x64，clipboard-win32-x64-msvc 已含）。解到 U盘 bin\\pi\\，入口 node_modules\\@mariozechner\\pi-coding-agent\\dist\\cli.js。来源: https://www.npmjs.com/package/@mariozechner/pi-coding-agent"
+      "notes": "Pi 编码 agent（@mariozechner/pi-coding-agent v0.73.1）自包含 node_modules 预装包（同 openclaw 打包策略，--os=win32 --cpu=x64，clipboard-win32-x64-msvc 已含；1.0.6 重打：--hard-dereference 烤平 14 个硬链，exFAT 兼容）。解到 U盘 bin\\pi\\，入口 node_modules\\@mariozechner\\pi-coding-agent\\dist\\cli.js。来源: https://www.npmjs.com/package/@mariozechner/pi-coding-agent"
     },
     {
       "name": "win10",
