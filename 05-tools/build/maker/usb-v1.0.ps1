@@ -1,4 +1,4 @@
-# usb-v1.0.ps1 版本: 1.3.4  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.5  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
 # 版本: 1.3.2（1.3.2：tar 解压容错——exFAT 上链接条目报错时成败改由入口文件判定，配 manifest 1.0.6 硬链烤平重打包）
@@ -22,7 +22,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.4'
+$Script:ScriptVersion   = '1.3.5'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -175,11 +175,18 @@ function Get-FileViaBits([string]$Url, [string]$Dest, [string]$DisplayName) {
 }
 
 # robocopy 拷贝：robocopy 自带按字节百分比进度（大文件拷入U盘用；退出码 0-7 均为成功）
-function Copy-FileWithProgress([string]$Path, [string]$DestDir) {
+function Copy-FileWithProgress([string]$Path, [string]$DestDir, [string]$DestName) {
     $name = Split-Path $Path -Leaf
+    if (-not $DestName) { $DestName = $name }
     Write-Host "    拷入 $name ..."
     robocopy (Split-Path $Path -Parent) $DestDir $name /NJH /NJS /NDL /MT:4
     if ($LASTEXITCODE -ge 8) { throw "robocopy 拷贝失败（退出码 $LASTEXITCODE）: $name" }
+    # robocopy 保留源文件名；需要改名时（如 codex-x86_64-pc-windows-msvc.exe → codex.exe）拷后重命名
+    if ($DestName -ne $name) {
+        $src = Join-Path $DestDir $name; $dst = Join-Path $DestDir $DestName
+        Move-Item -LiteralPath $src -Destination $dst -Force
+        if (-not (Test-Path -LiteralPath $dst)) { throw "拷贝后改名失败: $name → $DestName" }
+    }
 }
 
 # 解压 + 可见进度心跳（1.3.1）：目标多为 exFAT U盘，几万小文件解压动辄十几分钟，
@@ -954,7 +961,7 @@ $codexInstalledFinal = $false
 if ($Script:CodexExeLocal -and (Test-Path $Script:CodexExeLocal)) {
     try {
         New-Item -ItemType Directory -Force -Path (Join-Path $root 'bin') | Out-Null
-        Copy-FileWithProgress $Script:CodexExeLocal (Join-Path $root 'bin')
+        Copy-FileWithProgress $Script:CodexExeLocal (Join-Path $root 'bin') 'codex.exe'
         $codexCfgDir = Join-Path $root 'config\codex'
         New-Item -ItemType Directory -Force -Path $codexCfgDir | Out-Null
         $configToml = @'
