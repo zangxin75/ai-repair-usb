@@ -12,3 +12,7 @@ Thumbs.db
 .claude/
 1-5.jpg
 06-会议记录/
+
+# 内部推广文档不入库（2026-10-15 历史清洗后防回归）
+04-design/实施方案_GitHub仓库开源引流改造_*.md
+04-design/总结报告_GitHub仓库开源引流改造_*.md

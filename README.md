@@ -17,6 +17,8 @@
 | 💻 **Install Master** | Windows 10/11 ISOs are fetched live from Microsoft's official servers (we never redistribute a single Microsoft byte); Debian 12 netinst ships on the stick. |
 | 🤖 **Portable AI agents** | Codex CLI, OpenClaw and Pi ride along, pre-wired to any Anthropic/OpenAI-compatible gateway. Plug into any PC and start coding. |
 
+> **Works on:** repair mode boots any PC from the stick and targets Windows repairs (plus Debian installs); workstation mode plugs into healthy Windows hosts. Stick makers run on Windows / Linux / macOS.
+
 ## Quick start
 
 **Windows** (admin PowerShell, blank USB stick ⚠️ will be wiped):
@@ -78,6 +80,7 @@ Full story in [05-tools/](05-tools/) (Chinese; English docs in progress — PRs 
 - [x] v0.3 — built-in Claude skill set (smart-diagnosis / data-rescue / …), desktop launcher, one-line makers for Win/Linux
 - [x] v0.3.x — Codex CLI component, Windows-side AI-Workstation launcher
 - [ ] v0.4 — portable Node + OpenClaw + Pi (portable multi-agent workstation)
+- [ ] v0.5 — bilingual UI (中/EN) for the repair menus & AI-Workstation launcher
 - [ ] WinPE builder, repair-record system, English docs
 
 See [01-planning/README.md](01-planning/README.md) for the full plan (Chinese).

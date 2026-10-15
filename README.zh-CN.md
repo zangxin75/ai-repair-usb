@@ -17,6 +17,8 @@
 | 💻 **装机大师** | Windows 10/11 镜像运行时向微软官网动态换取官方直链（本项目不分发微软任何字节）；Debian 12 netinst 随盘内置。 |
 | 🤖 **随身 AI 引擎** | Codex CLI、OpenClaw、Pi 随盘携带，预接任意 Anthropic/OpenAI 兼容网关，换台电脑插上就能用。 |
 
+> **适用范围：** 维修模式从 U 盘启动任意 PC，面向 Windows 维修（含 Debian 装机）；工作站模式插在好电脑的 Windows 主机上即用。制作器支持 Windows / Linux / macOS 三平台。
+
 ## 快速开始
 
 **Windows**（管理员 PowerShell；空白U盘 ⚠️ 会被清空）：
@@ -78,6 +80,7 @@ bash tests/smoke.sh                # 15/15 无硬件冒烟测试
 - [x] v0.3 — 内置 Claude 技能集（智能诊断/数据抢救等）+ 桌面直启 + Win/Linux 一行命令制作器
 - [x] v0.3.x — Codex CLI 组件 + Windows 侧 AI-Workstation 启动器
 - [ ] v0.4 — 便携 Node + OpenClaw + Pi（便携多 Agent 工作站）
+- [ ] v0.5 — 维修菜单与 AI-Workstation 启动器双语化（中/EN）
 - [ ] WinPE 构建器、维修记录系统、英文文档
 
 ## 参与贡献
