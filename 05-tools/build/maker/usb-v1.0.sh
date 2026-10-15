@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.3.4  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.3.7  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.2（1.3.2：tar 解压容错——exFAT 上链接条目报错时成败改由入口文件判定，配 manifest 1.0.6 硬链烤平重打包）
+# 版本: 1.3.7（1.3.7：掉盘鲁棒性——下载缓存固定到 ~/.cache 跨次保留、两段式落盘（本机暂存→rsync 对账拷入）、
+#       掉盘检测（mountpoint）+ nonce 重定位恢复 + 三振退出、agents.json 原子写。目标平台=Linux（依赖 util-linux））
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
 #
@@ -22,13 +23,15 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.3.4"
+SCRIPT_VERSION="1.3.7"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
 MAX_RETRY=3
 PORTAL_API_BASE="https://tokeneff.com/api/usb"   # 制作时签发 USB token 的 portal 接口前缀（换域名改这里）
-WORKDIR="$(mktemp -d /tmp/ai-repair-usb-maker.XXXXXX)"
+WORKDIR="$(mktemp -d /tmp/ai-repair-usb-maker.XXXXXX)"     # 一次性解压暂存（EXIT 清）
+CACHE="${HOME}/.cache/ai-repair-usb-maker"                 # 1.3.7：下载缓存跨次保留（换盘重跑免重新下载）
+NONCE_FILE=".ai-repair-maker-session"                      # 1.3.7：掉盘后找回同一只盘的标识（Ventoy 写完、数据分区挂载后才写）
 
 # ---- TODO(K0): Ventoy CLI 实测参数对照表（K0 验证后替换为实测值）----
 # Ventoy2Disk.sh CLI：-i 安装（清盘）/-u 升级（保留数据分区文件）/-l 查询是否已装；-g GPT；-r <MB> 盘尾保留
@@ -45,7 +48,7 @@ die() {
     exit 1
 }
 trap 'c_fail "脚本异常退出（行 $LINENO）"; rm -rf "$WORKDIR"' ERR
-trap 'rm -rf "$WORKDIR"' EXIT
+trap 'rm -rf "$WORKDIR"' EXIT   # 1.3.7：只清一次性暂存；下载缓存（CACHE）刻意保留，trap 不得引用它
 
 # ---------------- 0. 版本输出（供应链自检，§2.5.5-③） ----------------
 cat <<EOF
@@ -127,6 +130,18 @@ else
     MANIFEST_VERSION="$(python3 -c "import json,sys;print(json.loads(sys.argv[1]).get('version','unknown'))" "$MANIFEST_JSON")"
 fi
 c_ok "组件清单获取成功（清单版本: ${MANIFEST_VERSION}）"
+
+# ---------------- 3.5 下载缓存（1.3.7：跨次保留，换盘重跑免重新下载） ----------------
+mkdir -p "$CACHE"
+find "$CACHE" -type f -mtime +30 -delete 2>/dev/null || true   # 30 天未用的缓存条目清理
+cache_hit() {  # $1=file $2=expected_sha(可空；空则按非空文件判) → 0=命中，跳过下载
+    [ -s "$1" ] || return 1
+    if [ -n "$2" ]; then
+        local actual; actual="$(sha256sum "$1" | awk '{print $1}')"
+        [ "${actual,,}" = "${2,,}" ] || return 1
+    fi
+    return 0
+}
 
 # ---------------- 4. 枚举 USB 磁盘（硬过滤） ----------------
 c_step "正在检测已插入的 U盘 ..."
@@ -313,7 +328,20 @@ if [ "$NEED_GB" -gt "$SIZE_GB" ]; then
 fi
 
 # ---------------- 6. 下载自产组件 + SHA256 校验 ----------------
-c_step "开始下载组件（curl 断点续传）..."
+c_step "开始下载组件（curl 断点续传；已下载过的组件自动命中缓存）..."
+# 本机暂存空间预检（1.3.7 两段式：下载包 + 解压树 ≈ 下载体积×2 + 2GB 余量）
+LOCAL_NEED_GB=2
+[ "$WANT_CLAUDE" = "1" ] && LOCAL_NEED_GB=$((LOCAL_NEED_GB + 1))
+[ "$WANT_CODEX" = "1" ] && LOCAL_NEED_GB=$((LOCAL_NEED_GB + CODEX_GB * 2))
+[ "$WANT_OPENCLAW" = "1" ] && LOCAL_NEED_GB=$((LOCAL_NEED_GB + OC_GB * 2))
+[ "$WANT_PI" = "1" ] && LOCAL_NEED_GB=$((LOCAL_NEED_GB + PI_GB * 2))
+[ "$WANT_NODE" = "1" ] && LOCAL_NEED_GB=$((LOCAL_NEED_GB + NODE_GB * 2))
+[ "$WANT_DEBIAN" = "1" ] && LOCAL_NEED_GB=$((LOCAL_NEED_GB + DEBIAN_GB))
+CACHE_AVAIL_KB="$(df -Pk "$CACHE" | awk 'NR==2{print $4}')"
+if [ "${CACHE_AVAIL_KB:-0}" -lt $((LOCAL_NEED_GB * 1024 * 1024)) ]; then
+    die "本机磁盘空间不足：制作需约 ${LOCAL_NEED_GB}GB 暂存（${CACHE} 下载缓存 + 解压），当前仅剩 $((CACHE_AVAIL_KB / 1024 / 1024))GB。" "请清理磁盘后重试；缓存位于 ${CACHE}，30 天未用会自动清理。"
+fi
+c_ok "本机暂存空间检查通过（预计需要约 ${LOCAL_NEED_GB}GB）"
 sha_check() {  # $1=file $2=expected $3=display
     [ -n "$2" ] || { c_warn "$3 未提供 SHA256，跳过校验（manifest 占位阶段）"; return 0; }
     local actual
@@ -368,10 +396,14 @@ for name in ventoy-linux ai-repair-live winpe 'memtest86+'; do
         continue
     fi
     [ -n "$fname" ] || die "manifest 中组件 $name 缺少 filename。" ""
-    dest="${WORKDIR}/${fname}"
-    echo "    下载 ${name} (${fname}) ..."
-    fetch_retry "$url" "$dest" || die "组件 $name 下载失败。" "请检查网络后重新运行。"
-    sha_check "$dest" "$sha" "$fname"
+    dest="${CACHE}/${fname}"
+    if cache_hit "$dest" "$sha"; then
+        c_ok "缓存命中: ${fname}（跳过下载）"
+    else
+        echo "    下载 ${name} (${fname}) ..."
+        fetch_retry "$url" "$dest" || die "组件 $name 下载失败。" "请检查网络后重新运行。"
+        sha_check "$dest" "$sha" "$fname"
+    fi
     LOCAL_FILE[$dl_key]="$dest"
 done
 
@@ -381,7 +413,7 @@ done
 # P-A A4：按勾选裁剪——claude 仅勾选时下载；PortableGit 为 claude/codex 共用，任一勾选即安装
 CLAUDE_EXE=""; CLAUDE_SHA=""
 MINGIT_ZIP=""
-mkdir -p "${WORKDIR}/portable-bin"
+mkdir -p "${CACHE}/portable-bin"
 if [ "$WANT_CLAUDE" != "1" ]; then
     echo "    未勾选 Claude Code，跳过 claude.exe 下载。"
 elif CLAUDE_VER="$(fetch_retry "${CLAUDE_GCS_BASE}/stable" - | tr -d '[:space:]')" && [ -n "$CLAUDE_VER" ]; then
@@ -389,14 +421,17 @@ elif CLAUDE_VER="$(fetch_retry "${CLAUDE_GCS_BASE}/stable" - | tr -d '[:space:]'
     CLAUDE_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n 's/.*"win32-x64"[^C]*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)"
     if [ -z "$CLAUDE_SHA" ]; then
         c_warn "无法从官方 manifest 取得 win32-x64 checksum，跳过便携版 claude.exe（不阻断制作）。"
-    elif fetch_retry "${CLAUDE_GCS_BASE}/${CLAUDE_VER}/win32-x64/claude.exe" "${WORKDIR}/portable-bin/TempClaude.exe"; then
-        actual="$(sha256sum "${WORKDIR}/portable-bin/TempClaude.exe" | awk '{print $1}')"
+    elif cache_hit "${CACHE}/portable-bin/claude.exe" "$CLAUDE_SHA"; then
+        CLAUDE_EXE="${CACHE}/portable-bin/claude.exe"
+        c_ok "缓存命中: claude.exe（跳过下载，官方 sha256 校验通过）"
+    elif fetch_retry "${CLAUDE_GCS_BASE}/${CLAUDE_VER}/win32-x64/claude.exe" "${CACHE}/portable-bin/TempClaude.exe"; then
+        actual="$(sha256sum "${CACHE}/portable-bin/TempClaude.exe" | awk '{print $1}')"
         if [ "${actual,,}" = "${CLAUDE_SHA,,}" ]; then
-            mv "${WORKDIR}/portable-bin/TempClaude.exe" "${WORKDIR}/portable-bin/claude.exe"
-            CLAUDE_EXE="${WORKDIR}/portable-bin/claude.exe"
+            mv "${CACHE}/portable-bin/TempClaude.exe" "${CACHE}/portable-bin/claude.exe"
+            CLAUDE_EXE="${CACHE}/portable-bin/claude.exe"
             c_ok "便携版 claude.exe 就绪（${CLAUDE_VER}，官方 sha256 校验通过）"
         else
-            rm -f "${WORKDIR}/portable-bin/TempClaude.exe"
+            rm -f "${CACHE}/portable-bin/TempClaude.exe"
             c_warn "便携版 claude.exe sha256 校验失败，已跳过（不阻断制作）——场景③将回落为在线安装。"
         fi
     else
@@ -406,19 +441,24 @@ else
     c_warn "Claude Code 官方分发桶不可达，跳过便携版 claude.exe（不阻断制作）。"
 fi
 if [ "$WANT_CLAUDE" = "1" ] || [ "$WANT_CODEX" = "1" ]; then
-    echo "    便携 Git（Bash 工具依赖，约 154MB）..."
-    if fetch_retry "$PORTABLE_GIT_URL" "${WORKDIR}/portable-bin/TempPortableGit.zip"; then
-        actual="$(sha256sum "${WORKDIR}/portable-bin/TempPortableGit.zip" | awk '{print $1}')"
-        if [ "${actual,,}" = "${PORTABLE_GIT_SHA,,}" ]; then
-            mv "${WORKDIR}/portable-bin/TempPortableGit.zip" "${WORKDIR}/portable-bin/PortableGit.zip"
-            MINGIT_ZIP="${WORKDIR}/portable-bin/PortableGit.zip"
-            c_ok "便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）"
-        else
-            rm -f "${WORKDIR}/portable-bin/TempPortableGit.zip"
-            c_warn "便携 Git sha256 校验失败，已跳过（不阻断制作）——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
-        fi
+    if cache_hit "${CACHE}/portable-bin/PortableGit.zip" "$PORTABLE_GIT_SHA"; then
+        MINGIT_ZIP="${CACHE}/portable-bin/PortableGit.zip"
+        c_ok "缓存命中: PortableGit.zip（跳过下载，自托管 sha256 校验通过）"
     else
-        c_warn "便携 Git 下载失败。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+        echo "    便携 Git（Bash 工具依赖，约 154MB）..."
+        if fetch_retry "$PORTABLE_GIT_URL" "${CACHE}/portable-bin/TempPortableGit.zip"; then
+            actual="$(sha256sum "${CACHE}/portable-bin/TempPortableGit.zip" | awk '{print $1}')"
+            if [ "${actual,,}" = "${PORTABLE_GIT_SHA,,}" ]; then
+                mv "${CACHE}/portable-bin/TempPortableGit.zip" "${CACHE}/portable-bin/PortableGit.zip"
+                MINGIT_ZIP="${CACHE}/portable-bin/PortableGit.zip"
+                c_ok "便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）"
+            else
+                rm -f "${CACHE}/portable-bin/TempPortableGit.zip"
+                c_warn "便携 Git sha256 校验失败，已跳过（不阻断制作）——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+            fi
+        else
+            c_warn "便携 Git 下载失败。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+        fi
     fi
 else
     echo "    未勾选任何 AI 引擎，跳过便携 Git 下载。"
@@ -427,61 +467,86 @@ fi
 # ---------------- 6.6 Codex CLI（P-A A4：勾选了 codex 才走；失败降级 installed=false） ----------------
 CODEX_EXE=""
 if [ "$WANT_CODEX" = "1" ] && [ "$CODEX_AVAILABLE" = "1" ]; then
-    echo "    Codex CLI（${CODEX_FNAME}，约 334MB）..."
-    if fetch_retry "$CODEX_URL" "${WORKDIR}/codex-download.exe" \
-        && sha_check "${WORKDIR}/codex-download.exe" "$CODEX_SHA" "$CODEX_FNAME"; then
-        mv "${WORKDIR}/codex-download.exe" "${WORKDIR}/codex.exe"
-        CODEX_EXE="${WORKDIR}/codex.exe"
-        c_ok "Codex CLI 就绪（发布侧 sha256 校验通过）"
+    if cache_hit "${CACHE}/${CODEX_FNAME}" "$CODEX_SHA"; then
+        CODEX_EXE="${CACHE}/${CODEX_FNAME}"
+        c_ok "缓存命中: ${CODEX_FNAME}（跳过下载，发布侧 sha256 校验通过）"
     else
-        rm -f "${WORKDIR}/codex-download.exe"
-        c_warn "Codex CLI 下载/校验失败。不阻断制作——盘上将不装 Codex，启动器不显示其入口。"
+        echo "    Codex CLI（${CODEX_FNAME}，约 334MB）..."
+        if fetch_retry "$CODEX_URL" "${CACHE}/codex-download.exe" \
+            && sha_check "${CACHE}/codex-download.exe" "$CODEX_SHA" "$CODEX_FNAME"; then
+            mv "${CACHE}/codex-download.exe" "${CACHE}/${CODEX_FNAME}"
+            CODEX_EXE="${CACHE}/${CODEX_FNAME}"
+            c_ok "Codex CLI 就绪（发布侧 sha256 校验通过）"
+        else
+            rm -f "${CACHE}/codex-download.exe"
+            c_warn "Codex CLI 下载/校验失败。不阻断制作——盘上将不装 Codex，启动器不显示其入口。"
+        fi
     fi
 fi
 
 # ---------------- 6.7 Debian 12 netinst（P-A A4：勾选了 Debian 才走；官方直链 + 官方钉值） ----------------
 DEBIAN_ISO=""
 if [ "$WANT_DEBIAN" = "1" ]; then
-    echo "    Debian 12 netinst（${DEBIAN_NAME}，官方 cdimage 存档直链，约 650MB）..."
-    if fetch_retry "$DEBIAN_URL" "${WORKDIR}/${DEBIAN_NAME}" \
-        && sha_check "${WORKDIR}/${DEBIAN_NAME}" "$DEBIAN_SHA" "$DEBIAN_NAME"; then
-        DEBIAN_ISO="${WORKDIR}/${DEBIAN_NAME}"
-        c_ok "Debian 12 netinst 就绪（官方 SHA256SUMS 钉值校验通过）"
+    if cache_hit "${CACHE}/${DEBIAN_NAME}" "$DEBIAN_SHA"; then
+        DEBIAN_ISO="${CACHE}/${DEBIAN_NAME}"
+        c_ok "缓存命中: ${DEBIAN_NAME}（跳过下载，官方 SHA256SUMS 钉值校验通过）"
     else
-        c_warn "Debian 12 镜像下载/校验失败。不阻断制作——盘上将无 Linux 安装镜像。"
+        echo "    Debian 12 netinst（${DEBIAN_NAME}，官方 cdimage 存档直链，约 650MB）..."
+        if fetch_retry "$DEBIAN_URL" "${CACHE}/${DEBIAN_NAME}" \
+            && sha_check "${CACHE}/${DEBIAN_NAME}" "$DEBIAN_SHA" "$DEBIAN_NAME"; then
+            DEBIAN_ISO="${CACHE}/${DEBIAN_NAME}"
+            c_ok "Debian 12 netinst 就绪（官方 SHA256SUMS 钉值校验通过）"
+        else
+            c_warn "Debian 12 镜像下载/校验失败。不阻断制作——盘上将无 Linux 安装镜像。"
+        fi
     fi
 fi
 
 # ---------------- 6.8 OpenClaw / Pi / 便携 Node（P-B：勾选了才走；失败降级 installed=false） ----------------
 NODE_TAR=""; OC_TAR=""; PI_TAR=""
 if [ "$WANT_NODE" = "1" ] && [ "$NODE_AVAILABLE" = "1" ]; then
-    echo "    便携 Node ${NODE_VER}（${NODE_FNAME}，约 36MB zip）..."
-    if fetch_retry "$NODE_URL" "${WORKDIR}/${NODE_FNAME}" \
-        && sha_check "${WORKDIR}/${NODE_FNAME}" "$NODE_SHA" "$NODE_FNAME"; then
-        NODE_TAR="${WORKDIR}/${NODE_FNAME}"
-        c_ok "便携 Node 运行时就绪（官方 SHASUMS 钉值校验通过）"
+    if cache_hit "${CACHE}/${NODE_FNAME}" "$NODE_SHA"; then
+        NODE_TAR="${CACHE}/${NODE_FNAME}"
+        c_ok "缓存命中: ${NODE_FNAME}（跳过下载，官方 SHASUMS 钉值校验通过）"
     else
-        c_warn "便携 Node 下载/校验失败。OpenClaw/Pi 将无法运行，不阻断制作。"
+        echo "    便携 Node ${NODE_VER}（${NODE_FNAME}，约 36MB zip）..."
+        if fetch_retry "$NODE_URL" "${CACHE}/${NODE_FNAME}" \
+            && sha_check "${CACHE}/${NODE_FNAME}" "$NODE_SHA" "$NODE_FNAME"; then
+            NODE_TAR="${CACHE}/${NODE_FNAME}"
+            c_ok "便携 Node 运行时就绪（官方 SHASUMS 钉值校验通过）"
+        else
+            c_warn "便携 Node 下载/校验失败。OpenClaw/Pi 将无法运行，不阻断制作。"
+        fi
     fi
 fi
 if [ "$WANT_OPENCLAW" = "1" ] && [ "$OC_AVAILABLE" = "1" ]; then
-    echo "    OpenClaw ${OC_VER} 预装包（${OC_FNAME}，约 154MB tar.gz）..."
-    if fetch_retry "$OC_URL" "${WORKDIR}/${OC_FNAME}" \
-        && sha_check "${WORKDIR}/${OC_FNAME}" "$OC_SHA" "$OC_FNAME"; then
-        OC_TAR="${WORKDIR}/${OC_FNAME}"
-        c_ok "OpenClaw 预装包就绪（发布侧 sha256 校验通过）"
+    if cache_hit "${CACHE}/${OC_FNAME}" "$OC_SHA"; then
+        OC_TAR="${CACHE}/${OC_FNAME}"
+        c_ok "缓存命中: ${OC_FNAME}（跳过下载，发布侧 sha256 校验通过）"
     else
-        c_warn "OpenClaw 下载/校验失败。不阻断制作——启动器不显示其入口。"
+        echo "    OpenClaw ${OC_VER} 预装包（${OC_FNAME}，约 154MB tar.gz）..."
+        if fetch_retry "$OC_URL" "${CACHE}/${OC_FNAME}" \
+            && sha_check "${CACHE}/${OC_FNAME}" "$OC_SHA" "$OC_FNAME"; then
+            OC_TAR="${CACHE}/${OC_FNAME}"
+            c_ok "OpenClaw 预装包就绪（发布侧 sha256 校验通过）"
+        else
+            c_warn "OpenClaw 下载/校验失败。不阻断制作——启动器不显示其入口。"
+        fi
     fi
 fi
 if [ "$WANT_PI" = "1" ] && [ "$PI_AVAILABLE" = "1" ]; then
-    echo "    Pi ${PI_VER} 预装包（${PI_FNAME}，约 33MB tar.gz）..."
-    if fetch_retry "$PI_URL" "${WORKDIR}/${PI_FNAME}" \
-        && sha_check "${WORKDIR}/${PI_FNAME}" "$PI_SHA" "$PI_FNAME"; then
-        PI_TAR="${WORKDIR}/${PI_FNAME}"
-        c_ok "Pi 预装包就绪（发布侧 sha256 校验通过）"
+    if cache_hit "${CACHE}/${PI_FNAME}" "$PI_SHA"; then
+        PI_TAR="${CACHE}/${PI_FNAME}"
+        c_ok "缓存命中: ${PI_FNAME}（跳过下载，发布侧 sha256 校验通过）"
     else
-        c_warn "Pi 下载/校验失败。不阻断制作——启动器不显示其入口。"
+        echo "    Pi ${PI_VER} 预装包（${PI_FNAME}，约 33MB tar.gz）..."
+        if fetch_retry "$PI_URL" "${CACHE}/${PI_FNAME}" \
+            && sha_check "${CACHE}/${PI_FNAME}" "$PI_SHA" "$PI_FNAME"; then
+            PI_TAR="${CACHE}/${PI_FNAME}"
+            c_ok "Pi 预装包就绪（发布侧 sha256 校验通过）"
+        else
+            c_warn "Pi 下载/校验失败。不阻断制作——启动器不显示其入口。"
+        fi
     fi
 fi
 
@@ -536,6 +601,99 @@ MNT="${WORKDIR}/mnt"
 mkdir -p "$MNT"
 mount "/dev/${DATA_PART}" "$MNT" || die "数据分区挂载失败。" "请检查系统是否安装 exfat 支持（exfatprogs / exfat-fuse）。"
 
+# ---------------- 8.1 掉盘感知与恢复（1.3.7） ----------------
+# 挂载态检测：不能用目录存在性判断 —— MNT 是 WORKDIR 下的挂载点目录，掉盘后空目录仍在，恒真
+usb_alive() { mountpoint -q "$MNT"; }
+
+wait_usb_return() {
+    c_warn "U盘 在写入过程中断开了。请不要关闭本窗口、也不要重新运行制作器："
+    echo  "  请把同一只 U盘 重新插好（可以换一个 USB 口），然后回到本窗口按回车。"
+    echo  "  已下载的组件与已写入的部分都会自动保留，从断点继续。"
+    # 清陈旧挂载：设备已消失时普通 umount 可能 EBUSY/挂起 → lazy 兜底
+    umount "$MNT" 2>/dev/null || umount -l "$MNT" 2>/dev/null || true
+    local nonce=""
+    [ -s "${CACHE}/session-nonce" ] && nonce="$(cat "${CACHE}/session-nonce")"
+    local probe="${WORKDIR}/probe" part p
+    while true; do
+        read -rp "插好 U盘 后按回车继续: " _ACK
+        mkdir -p "$probe"
+        # nonce 重定位：候选 = 所有 USB 磁盘的分区；逐个临时挂到 probe 点读 nonce，
+        # 匹配者挂回同一 $MNT 路径（路径不变 → 后续代码零改动），其余立即卸载
+        for part in $(lsblk -d -n -o NAME,TRAN | awk '$2=="usb"{print $1}'); do
+            for p in $(lsblk -n -o NAME "/dev/${part}" 2>/dev/null | tail -n +2); do
+                if mount "/dev/${p}" "$probe" 2>/dev/null; then
+                    if [ -n "$nonce" ] && [ "$(cat "$probe/$NONCE_FILE" 2>/dev/null)" = "$nonce" ]; then
+                        umount "$probe"
+                        mount "/dev/${p}" "$MNT" \
+                            || die "找回的分区（/dev/${p}）重新挂载失败。" "请重新运行制作器——下载缓存已保留（${CACHE}），无需重新下载。"
+                        c_ok "已找回U盘（/dev/${p} → $MNT），继续写入 ..."
+                        return 0
+                    fi
+                    umount "$probe" 2>/dev/null || umount -l "$probe" 2>/dev/null || true
+                fi
+            done
+        done
+        c_warn "未找到制作中的那只 U盘（nonce 不匹配）。请确认插回的是刚才那只盘，或换一个 USB 口重插。"
+    done
+}
+
+# 三振包装器（分类表：①盘不在→恢复+计 1 振；②盘在重试 3 次败→Die；③确定性错误不走本函数，保留降级）
+usb_retry() {  # $1=标签 $2...=命令
+    local label="$1"; shift
+    local fail=0
+    while true; do
+        if "$@"; then return 0; fi
+        fail=$((fail + 1))
+        if ! usb_alive; then wait_usb_return; fi
+        if [ "$fail" -ge 3 ]; then
+            die "${label} 连续失败 ${fail} 次（U盘 可能不稳定）。" "下载缓存已保留在本机（${CACHE}），换一只U盘重新运行制作器即可，无需重新下载。"
+        fi
+        c_warn "${label} 第 ${fail} 次失败，重试 ..."
+    done
+}
+
+# 整树拷贝（暂存树 → U盘）：rsync 优先（跳过已拷文件=断点续拷）；openrsync/macOS 不在本支持范围
+RSYNC_OPTS=(-rt --partial --inplace --no-perms --no-owner)
+tree_copy() {  # $1=src树 $2=dest
+    mkdir -p "$2"
+    if command -v rsync >/dev/null 2>&1; then
+        rsync "${RSYNC_OPTS[@]}" "$1/" "$2/"
+    else
+        # 降级 cp -R：成败由随后的三对账驱动（对账不过 → usb_retry 重拷）
+        cp -R "$1/." "$2/"
+    fi
+}
+
+# 三对账：文件数 + 总字节 + 入口文件非 0 字节
+assert_tree_synced() {  # $1=src $2=dst $3=label $4=入口相对路径(空格分隔)
+    local sc dc sb db
+    sc="$(find "$1" -type f | wc -l)"; dc="$(find "$2" -type f 2>/dev/null | wc -l)"
+    [ "$sc" = "$dc" ] || { c_warn "$3 对账失败：文件数 ${dc}/${sc}"; return 1; }
+    sb="$(du -sb "$1" | cut -f1)"; db="$(du -sb "$2" | cut -f1)"
+    [ "$sb" = "$db" ] || { c_warn "$3 对账失败：总字节数不匹配（暂存 ${sb} / U盘 ${db}）"; return 1; }
+    local e
+    for e in $4; do
+        [ -s "$2/$e" ] || { c_warn "$3 对账失败：入口缺失/为空 $e"; return 1; }
+    done
+    return 0
+}
+
+# 掉盘恢复 + 整树拷贝 + 对账 + 三振 一步到位
+# 注意：拷贝前由调用方 rm -rf 目标（干净起点）；本函数内不清场——掉盘恢复重试时保留半成品，rsync 增量续拷
+usb_tree_copy_once() {  # $1=src $2=dst $3=label $4=入口(空格分隔)
+    tree_copy "$1" "$2" && assert_tree_synced "$1" "$2" "$3" "$4"
+}
+usb_tree_copy() {  # $1=src $2=dst $3=label $4=入口相对路径(空格分隔)
+    usb_retry "$3" usb_tree_copy_once "$1" "$2" "$3" "$4"
+}
+
+# 掉盘标识：Ventoy 已写完、数据分区已挂载 → 写 nonce（全新 -i 会清盘，故必须此刻才写）
+SESSION_NONCE="$(tr -dc 'a-f0-9' < /dev/urandom | head -c 32)"
+printf '%s' "$SESSION_NONCE" > "$MNT/$NONCE_FILE"
+printf '%s' "$SESSION_NONCE" > "${CACHE}/session-nonce"
+
+echo ""
+echo "    >>> 接下来开始向 U盘 写入文件，此步最慢（小文件多、U盘 写速有限），请勿拔盘 <<< "
 mkdir -p "$MNT/ISO" "$MNT/ventoy" "$MNT/config"
 # 仅拷实际下载到的组件（未发布的 winpe/memtest86+ 自动跳过）；带进度（pv 优先，dd 兜底）
 copy_progress() {  # $1=src $2=destdir
@@ -549,12 +707,12 @@ copy_progress() {  # $1=src $2=destdir
     fi
 }
 for name in ai-repair-live winpe 'memtest86+'; do
-    [ -n "${LOCAL_FILE[$name]:-}" ] && copy_progress "${LOCAL_FILE[$name]}" "$MNT/ISO"
+    [ -n "${LOCAL_FILE[$name]:-}" ] && usb_retry "镜像 ${name}" copy_progress "${LOCAL_FILE[$name]}" "$MNT/ISO"
 done
 
 # Debian 12 netinst（P-A A4：勾选且下载成功才拷入）
 if [ -n "$DEBIAN_ISO" ]; then
-    copy_progress "$DEBIAN_ISO" "$MNT/ISO"
+    usb_retry "Debian 镜像" copy_progress "$DEBIAN_ISO" "$MNT/ISO"
     c_ok "已放入 Linux 安装镜像: ${DEBIAN_NAME}"
 fi
 
@@ -688,7 +846,7 @@ fi
 CODEX_INSTALLED=0
 if [ -n "$CODEX_EXE" ]; then
     mkdir -p "$MNT/bin" "$MNT/config/codex"
-    cp "$CODEX_EXE" "$MNT/bin/codex.exe"
+    usb_retry "Codex CLI" cp "$CODEX_EXE" "$MNT/bin/codex.exe"
     cat > "$MNT/config/codex/config.toml" <<'TOML'
 # Codex CLI 配置（制作器生成；AI 维修U盘 P-A）
 model_provider = "tokeneff"
@@ -705,47 +863,50 @@ TOML
 fi
 
 # Node / OpenClaw / Pi 落盘（P-B §3.3-3.5：bin/node/ + bin/openclaw/ + bin/pi/）
+# 1.3.7 两段式：先解压到本机暂存（快、可重试），再 rsync 整树拷入U盘（断点续拷+对账+掉盘恢复）
 NODE_INSTALLED=0; OC_INSTALLED=0; PI_INSTALLED=0
+mkdir -p "${WORKDIR}/extract"
 if [ -n "$NODE_TAR" ]; then
-    rm -rf "$MNT/bin/node" "${WORKDIR}/node-extract"
-    mkdir -p "${WORKDIR}/node-extract"
-    echo "    解压便携 Node ..."
-    if extract_progress "便携 Node" "${WORKDIR}/node-extract" unzip -qo "$NODE_TAR" -d "${WORKDIR}/node-extract" \
-        && INNER="$(find "${WORKDIR}/node-extract" -maxdepth 1 -mindepth 1 -type d | head -n1)" \
-        && [ -f "$INNER/node.exe" ]; then
-        # 注意用 -f 不用 -x：zip 内 node.exe 无执行位（external_attr=0），Linux 解出 0664；
-        # 该 exe 是 Windows 载荷，Linux 侧只做存在性判断
-        mv "$INNER" "$MNT/bin/node"
+    NODE_STAGE="${WORKDIR}/extract/node"
+    echo "    解压便携 Node（本机暂存）..."
+    # 注意用 -f 不用 -x：zip 内 node.exe 无执行位（external_attr=0），Linux 解出 0664；
+    # 该 exe 是 Windows 载荷，Linux 侧只做存在性判断
+    if extract_progress "便携 Node" "$NODE_STAGE" unzip -qo "$NODE_TAR" -d "$NODE_STAGE" \
+        && INNER="$(find "$NODE_STAGE" -maxdepth 1 -mindepth 1 -type d | head -n1)" \
+        && [ -f "$INNER/node.exe" ] \
+        && rm -rf "$MNT/bin/node" \
+        && usb_tree_copy "$INNER" "$MNT/bin/node" "便携 Node" "node.exe"; then
         NODE_INSTALLED=1
-        c_ok "已解压: bin/node/（便携 Node 运行时）"
+        c_ok "已落盘: bin/node/（便携 Node 运行时）"
     else
-        c_warn "便携 Node 解压失败。OpenClaw/Pi 将无法运行，不阻断制作。"
+        c_warn "便携 Node 落盘失败。OpenClaw/Pi 将无法运行，不阻断制作。"
     fi
 fi
 if [ -n "$OC_TAR" ]; then
-    rm -rf "$MNT/bin/openclaw"; mkdir -p "$MNT/bin/openclaw"
-    echo "    解包 OpenClaw 预装包 ..."
+    OC_STAGE="${WORKDIR}/extract/openclaw"
+    echo "    解包 OpenClaw 预装包（本机暂存）..."
     # tar 内为 node_modules/ 顶层；预装包已 --dereference 烤平符号链接（exFAT 兼容）
-    # tar 在 exFAT 上可能因个别链接条目报非零（无害内容），成败以入口文件存在性为准
-    extract_progress "OpenClaw" "$MNT/bin/openclaw" tar -xzf "$OC_TAR" -C "$MNT/bin/openclaw" || true
-    if [ -f "$MNT/bin/openclaw/node_modules/openclaw/openclaw.mjs" ]; then
+    extract_progress "OpenClaw" "$OC_STAGE" tar -xzf "$OC_TAR" -C "$OC_STAGE" || true
+    if [ -f "$OC_STAGE/node_modules/openclaw/openclaw.mjs" ] \
+        && rm -rf "$MNT/bin/openclaw" \
+        && usb_tree_copy "$OC_STAGE" "$MNT/bin/openclaw" "OpenClaw" "node_modules/openclaw/openclaw.mjs"; then
         OC_INSTALLED=1
-        c_ok "已解包: bin/openclaw/（入口 node_modules/openclaw/openclaw.mjs）"
+        c_ok "已落盘: bin/openclaw/（入口 node_modules/openclaw/openclaw.mjs）"
     else
-        rm -rf "$MNT/bin/openclaw"
-        c_warn "OpenClaw 解包失败。不阻断制作——启动器不显示其入口。"
+        c_warn "OpenClaw 落盘失败。不阻断制作——启动器不显示其入口。"
     fi
 fi
 if [ -n "$PI_TAR" ]; then
-    rm -rf "$MNT/bin/pi"; mkdir -p "$MNT/bin/pi"
-    echo "    解包 Pi 预装包 ..."
-    extract_progress "Pi" "$MNT/bin/pi" tar -xzf "$PI_TAR" -C "$MNT/bin/pi" || true
-    if [ -f "$MNT/bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ]; then
+    PI_STAGE="${WORKDIR}/extract/pi"
+    echo "    解包 Pi 预装包（本机暂存）..."
+    extract_progress "Pi" "$PI_STAGE" tar -xzf "$PI_TAR" -C "$PI_STAGE" || true
+    if [ -f "$PI_STAGE/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ] \
+        && rm -rf "$MNT/bin/pi" \
+        && usb_tree_copy "$PI_STAGE" "$MNT/bin/pi" "Pi" "node_modules/@mariozechner/pi-coding-agent/dist/cli.js"; then
         PI_INSTALLED=1
-        c_ok "已解包: bin/pi/（入口 node_modules/@mariozechner/pi-coding-agent/dist/cli.js）"
+        c_ok "已落盘: bin/pi/（入口 node_modules/@mariozechner/pi-coding-agent/dist/cli.js）"
     else
-        rm -rf "$MNT/bin/pi"
-        c_warn "Pi 解包失败。不阻断制作——启动器不显示其入口。"
+        c_warn "Pi 落盘失败。不阻断制作——启动器不显示其入口。"
     fi
 fi
 
@@ -753,7 +914,7 @@ fi
 if [ -n "$CLAUDE_EXE" ]; then
     mkdir -p "$MNT/bin"
     echo "    拷入 claude.exe ..."
-    cp "$CLAUDE_EXE" "$MNT/bin/claude.exe"
+    usb_retry "claude.exe" cp "$CLAUDE_EXE" "$MNT/bin/claude.exe"
     actual="$(sha256sum "$MNT/bin/claude.exe" | awk '{print $1}')"
     if [ "${actual,,}" = "${CLAUDE_SHA,,}" ]; then
         c_ok "bin/claude.exe 盘上复核通过"
@@ -765,12 +926,14 @@ if [ -n "$CLAUDE_EXE" ]; then
 fi
 if [ -n "$MINGIT_ZIP" ]; then
     mkdir -p "$MNT/bin"
-    echo "    解压便携 Git 到 U盘 bin/PortableGit ..."
-    if extract_progress "便携 Git" "$MNT/bin/PortableGit" unzip -qo "$MINGIT_ZIP" -d "$MNT/bin/PortableGit"; then
-        c_ok "便携 Git 已解压到 U盘 bin/PortableGit"
+    GIT_STAGE="${WORKDIR}/extract/PortableGit"
+    echo "    解压便携 Git（本机暂存）..."
+    if extract_progress "便携 Git" "$GIT_STAGE" unzip -qo "$MINGIT_ZIP" -d "$GIT_STAGE" \
+        && rm -rf "$MNT/bin/PortableGit" \
+        && usb_tree_copy "$GIT_STAGE" "$MNT/bin/PortableGit" "便携 Git" "bin/git.exe"; then
+        c_ok "便携 Git 已落盘到 U盘 bin/PortableGit"
     else
-        rm -rf "$MNT/bin/PortableGit"
-        c_warn "便携 Git 解压失败，已跳过（不阻断制作）"
+        c_warn "便携 Git 落盘失败，已跳过（不阻断制作）"
     fi
 fi
 
@@ -783,6 +946,8 @@ CODEX_DECLINED=0; [ "$WANT_CODEX" = "1" ] || CODEX_DECLINED=1
 OC_DECLINED=0;   [ "$WANT_OPENCLAW" = "1" ] || OC_DECLINED=1
 PI_DECLINED=0;   [ "$WANT_PI" = "1" ] || PI_DECLINED=1
 NODE_DECLINED=0; [ "$WANT_NODE" = "1" ] || NODE_DECLINED=1
+# 1.3.7：写盘前守卫（组件段间隙掉盘 → 恢复后再写）
+usb_alive || wait_usb_return
 if command -v jq >/dev/null 2>&1; then
     jq -n \
         --argjson ci "$CLAUDE_INSTALLED" --argjson cd "$CLAUDE_DECLINED" \
@@ -792,13 +957,14 @@ if command -v jq >/dev/null 2>&1; then
         --argjson pi2 "$PI_INSTALLED" --argjson pd "$PI_DECLINED" --argjson pavail "$PI_AVAILABLE" --arg pver "$PI_VER" \
         --argjson ni "$NODE_INSTALLED" --argjson nd "$NODE_DECLINED" --argjson navail "$NODE_AVAILABLE" --arg nver "$NODE_VER" \
         '{claude:{installed:$ci,userDeclined:$cd}} + (if $xavail==1 then {codex:{installed:$xi,userDeclined:$xd}} else {} end) + (if $oavail==1 then {openclaw:{installed:$oi,userDeclined:$od,version:$over}} else {} end) + (if $pavail==1 then {pi:{installed:$pi2,userDeclined:$pd,version:$pver}} else {} end) + (if $navail==1 then {node:{installed:$ni,userDeclined:$nd,version:$nver}} else {} end)' \
-        > "$MNT/config/agents.json"
+        > "$MNT/config/agents.json.tmp"
+    mv -f "$MNT/config/agents.json.tmp" "$MNT/config/agents.json"
 else
     python3 - "$CLAUDE_INSTALLED" "$CLAUDE_DECLINED" "$CODEX_INSTALLED" "$CODEX_DECLINED" "$CODEX_AVAILABLE" \
         "$OC_INSTALLED" "$OC_DECLINED" "$OC_AVAILABLE" "$OC_VER" \
         "$PI_INSTALLED" "$PI_DECLINED" "$PI_AVAILABLE" "$PI_VER" \
         "$NODE_INSTALLED" "$NODE_DECLINED" "$NODE_AVAILABLE" "$NODE_VER" \
-        > "$MNT/config/agents.json" <<'PYJS'
+        > "$MNT/config/agents.json.tmp" <<'PYJS'
 import json, sys
 ci, cd, xi, xd, xa = map(int, sys.argv[1:6])
 oi, od, oa, ov = int(sys.argv[6]), int(sys.argv[7]), int(sys.argv[8]), sys.argv[9]
@@ -815,6 +981,7 @@ if na:
     d["node"] = {"installed": bool(ni), "userDeclined": bool(nd), "version": nv}
 print(json.dumps(d, indent=2))
 PYJS
+    mv -f "$MNT/config/agents.json.tmp" "$MNT/config/agents.json"
 fi
 if [ -n "$DEBIAN_ISO" ]; then
     printf '{\n  "debian": {\n    "filename": "%s",\n    "sha256": "%s",\n    "source": "%s"\n  }\n}\n' \
@@ -826,6 +993,7 @@ c_ok "已写入: config/agents.json + config/isos.json（AI 引擎勾选记录�
 
 sync
 c_ok "镜像与配置拷入完成"
+echo "    正在等待系统刷盘/杀毒扫描完成，可能需要几分钟，请勿拔盘 ..."
 
 # ---------------- 9. 逐文件 SHA256 复核 ----------------
 c_step "正在做最终校验 ..."

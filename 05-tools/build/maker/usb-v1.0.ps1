@@ -1,7 +1,8 @@
-# usb-v1.0.ps1 版本: 1.3.6  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.7  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.2（1.3.2：tar 解压容错——exFAT 上链接条目报错时成败改由入口文件判定，配 manifest 1.0.6 硬链烤平重打包）
+# 版本: 1.3.7（1.3.7：掉盘鲁棒性——两段式落盘（本机暂存→对账拷贝）、下载缓存保留（换盘重跑免重下）、
+#       掉盘检测+nonce 重定位恢复+三振退出、组件落盘三对账、agents.json 原子写、断盘哨兵改走恢复路径）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
 # 兼容: PowerShell 5.1+（Win10/Win11 自带，不依赖第三方工具）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5
@@ -22,7 +23,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.6'
+$Script:ScriptVersion   = '1.3.7'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -31,6 +32,12 @@ $Script:HttpTimeoutSec  = 30        # manifest / 小请求超时
 $Script:PortalApiBase   = 'https://tokeneff.com/api/usb'   # 制作时签发 USB token 的 portal 接口前缀（换域名改这里）
 $Script:BitsMaxRetry    = 3         # 所有网络操作统一重试次数
 $Script:WorkDir         = Join-Path $env:TEMP 'ai-repair-usb-maker'
+# 1.3.7 掉盘鲁棒性：缓存跨次运行保留（换盘重跑免重新下载）；解压暂存一次性；nonce 用于掉盘后找回同一只盘
+$Script:CacheDir        = Join-Path $Script:WorkDir 'cache'
+$Script:ExtractDir      = Join-Path $Script:WorkDir 'extract'
+$Script:NonceFile       = '.ai-repair-maker-session'
+$Script:SessionNonce    = $null
+$Script:UsbRoot         = $null    # 当前U盘数据分区根（掉盘重挂后由恢复逻辑更新）
 
 # ---- 场景③便携运行时（v0.2 决策：U盘 bin\ 内置，任意 Windows 免安装直跑）----
 # Claude Code 官方 GCS 分发桶：/stable → 最新版本号；/<ver>/manifest.json → win32-x64 sha256
@@ -175,17 +182,107 @@ function Get-FileViaBits([string]$Url, [string]$Dest, [string]$DisplayName) {
 }
 
 # robocopy 拷贝：robocopy 自带按字节百分比进度（大文件拷入U盘用；退出码 0-7 均为成功）
+# 1.3.7：去掉多线程旗标（多线程在 flaky USB 上放大失败面）；掉盘恢复由调用处 Invoke-UsbCopy 承担
 function Copy-FileWithProgress([string]$Path, [string]$DestDir, [string]$DestName) {
     $name = Split-Path $Path -Leaf
     if (-not $DestName) { $DestName = $name }
     Write-Host "    拷入 $name ..."
-    robocopy (Split-Path $Path -Parent) $DestDir $name /NJH /NJS /NDL /MT:4
+    robocopy (Split-Path $Path -Parent) $DestDir $name /NJH /NJS /NDL
     if ($LASTEXITCODE -ge 8) { throw "robocopy 拷贝失败（退出码 $LASTEXITCODE）: $name" }
     # robocopy 保留源文件名；需要改名时（如 codex-x86_64-pc-windows-msvc.exe → codex.exe）拷后重命名
     if ($DestName -ne $name) {
         $src = Join-Path $DestDir $name; $dst = Join-Path $DestDir $DestName
         Move-Item -LiteralPath $src -Destination $dst -Force
         if (-not (Test-Path -LiteralPath $dst)) { throw "拷贝后改名失败: $name → $DestName" }
+    }
+}
+
+# ---------------- 1.3.7 掉盘鲁棒性：树拷贝 / 对账 / 恢复 / 三振 ----------------
+
+# 整树拷贝（暂存树 → U盘）：robocopy /NJH /NJS /NDL 零输出 → 后台跑 + 轮询目标树文件数驱动 Write-Progress
+# 进度只作展示：目标树有残留时计数可超暂存总量 → clamp 0-100；完成只认 robocopy 退出码，绝不以轮询值判完成
+function Copy-TreeWithRecovery([string]$Source, [string]$Dest, [string]$Label) {
+    if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+    $totalFiles = @(Get-ChildItem -LiteralPath $Source -Recurse -File -ErrorAction SilentlyContinue).Count
+    if ($totalFiles -eq 0) { throw "暂存树为空（$Source），$Label 无法拷贝" }
+    # 进度条受脚本头部全局 SilentlyContinue 压制 → 本函数内临时恢复（同 Expand-WithProgress 模式）
+    $prevProgress = $ProgressPreference
+    $ProgressPreference = 'Continue'
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $p = Start-Process -FilePath robocopy.exe -ArgumentList @("`"$Source`"", "`"$Dest`"", '/E', '/NJH', '/NJS', '/NDL', '/R:1', '/W:1') -PassThru -WindowStyle Hidden
+    try {
+        while (-not $p.HasExited) {
+            $done = @(Get-ChildItem -LiteralPath $Dest -Recurse -File -ErrorAction SilentlyContinue).Count
+            $pct = [math]::Min(100, [int](100 * $done / $totalFiles))
+            Write-Progress -Activity "写入U盘 $Label" -Status ("{0} / {1} 个文件（耗时 {2}）" -f $done, $totalFiles, $sw.Elapsed.ToString('mm\:ss')) -PercentComplete $pct
+            Start-Sleep -Seconds 2
+        }
+    } finally { Write-Progress -Activity "写入U盘 $Label" -Completed; $ProgressPreference = $prevProgress }
+    if ($p.ExitCode -ge 8) { throw "robocopy 写入U盘失败（退出码 $($p.ExitCode)）: $Label" }
+}
+
+# 三对账：文件数 + 总字节 + 关键入口非 0 字节（对账不过 → 调用方补拷一次 → 再败走掉盘/三振路径）
+function Assert-TreeSynced([string]$Source, [string]$Dest, [string]$Label, [string[]]$EntryFiles) {
+    $sf = @(Get-ChildItem -LiteralPath $Source -Recurse -File -ErrorAction Stop)
+    $df = @(Get-ChildItem -LiteralPath $Dest -Recurse -File -ErrorAction SilentlyContinue)
+    if ($sf.Count -ne $df.Count) { throw "$Label 对账失败：U盘侧 $($df.Count) 个文件 / 暂存侧 $($sf.Count) 个" }
+    $sb = ($sf | Measure-Object Length -Sum).Sum; $db = ($df | Measure-Object Length -Sum).Sum
+    if ($sb -ne $db) { throw "$Label 对账失败：总字节数不匹配（暂存 $sb / U盘 $db）" }
+    foreach ($e in $EntryFiles) {
+        $f = Join-Path $Dest $e
+        if (-not (Test-Path -LiteralPath $f)) { throw "$Label 对账失败：入口文件缺失 $e" }
+        if ((Get-Item -LiteralPath $f).Length -eq 0) { throw "$Label 对账失败：入口文件为 0 字节 $e" }
+    }
+}
+
+# 掉盘恢复：人话提示 → 等用户插回 → 按 nonce 找回同一只盘（盘符可能变化）→ 更新 $Script:UsbRoot
+function Wait-UsbReturn {
+    Write-Host ''
+    Write-Warn 'U盘 在写入过程中断开了。请不要关闭本窗口、也不要重新运行制作器：'
+    Write-Host '  请把同一只 U盘 重新插好（可以换一个 USB 口），然后回到本窗口按回车。' -ForegroundColor Yellow
+    Write-Host '  已下载的组件与已写入的部分都会自动保留，从断点继续，无需从头再来。' -ForegroundColor Yellow
+    $nonceLocal = Join-Path $Script:CacheDir 'session-nonce'
+    $nonce = $Script:SessionNonce
+    if (-not $nonce -and (Test-Path $nonceLocal)) { $nonce = (Get-Content $nonceLocal -Raw).Trim() }
+    while ($true) {
+        Read-Host '插好 U盘 后按回车继续'
+        foreach ($d in (Get-Disk | Where-Object { $_.BusType -eq 'USB' } -ErrorAction SilentlyContinue)) {
+            foreach ($p in (Get-Partition -DiskNumber $d.Number -ErrorAction SilentlyContinue)) {
+                if (-not $p.DriveLetter) { continue }
+                $probe = "$($p.DriveLetter):\"
+                $probeNonce = Join-Path $probe $Script:NonceFile
+                if ((Test-Path -LiteralPath $probeNonce) -and ((Get-Content $probeNonce -Raw -ErrorAction SilentlyContinue).Trim() -eq $nonce)) {
+                    $Script:UsbRoot = $probe
+                    Write-Ok "已找回U盘（数据分区: $probe），继续写入 ..."
+                    return $probe
+                }
+            }
+        }
+        Write-Warn '未找到制作中的那只 U盘（标识不匹配）。请确认插回的是刚才那只盘，或换一个 USB 口重插。'
+    }
+}
+
+# 三振包装器（分类表见计划步骤 4）：
+#   ①盘不在（Test-Path 根目录失败）→ Wait-UsbReturn 恢复后重试，计 1 振
+#   ②盘在但拷贝/对账失败 → 直接重试，计 1 振；累计 3 振 → Die（文案：缓存保留，换盘重跑免重新下载）
+#   ③非 I/O 确定性错误（sha 不过/入口缺失等）不走本函数——保留调用方原有 installed=false 降级
+function Invoke-UsbCopy([string]$Label, [scriptblock]$Action) {
+    $fail = 0
+    while ($true) {
+        try {
+            & $Action
+            return
+        } catch {
+            $fail++
+            if ($Script:UsbRoot -and -not (Test-Path -LiteralPath $Script:UsbRoot)) {
+                Wait-UsbReturn | Out-Null          # ① 掉盘 → 恢复后重试
+            }
+            if ($fail -ge 3) {                       # ② 三振
+                Die "$Label 连续失败 ${fail} 次（U盘 可能不稳定）。" "下载缓存已保留在本机（$Script:CacheDir），换一只U盘重新运行制作器即可，无需重新下载。"
+            }
+            Write-Warn "$Label 第 ${fail} 次失败: $($_.Exception.Message)　重试 ..."
+        }
     }
 }
 
@@ -595,6 +692,25 @@ Write-Ok "勾选结果: Claude Code = $(if($wantClaude){'装'}else{'不装'}) / 
 # ---------------- 6. 准备工作目录并下载自产组件 ----------------
 Write-Step '开始下载组件（支持断点续传 + 实时进度）...'
 New-Item -ItemType Directory -Force -Path $Script:WorkDir | Out-Null
+# 1.3.7：下载缓存保留（换盘重跑免重新下载）；30 天未见使用的缓存条目清掉，防 TEMP 撑爆
+New-Item -ItemType Directory -Force -Path $Script:CacheDir | Out-Null
+Get-ChildItem -LiteralPath $Script:CacheDir -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+
+# 本机暂存盘空间预检（1.3.7 两段式）：需容纳 Σ勾选下载包 + Σ解压树 + 余量；不足给人话
+$dlEstGB = 0.24 * [int]$wantClaude + 0.15 * [int]($wantClaude -or $wantCodex) + 0.65 * [int]$wantDebian
+if ($wantCodex -and $codexComponent)    { $dlEstGB += ($codexComponent.sizeBytes / 1GB) }
+if ($wantOpenclaw -and $openclawComponent) { $dlEstGB += ($openclawComponent.sizeBytes / 1GB) }
+if ($wantPi -and $piComponent)          { $dlEstGB += ($piComponent.sizeBytes / 1GB) }
+if ($wantNode -and $nodeComponent)      { $dlEstGB += ($nodeComponent.sizeBytes / 1GB) }
+$extractEstGB = $openclawEstGB * [int]$wantOpenclaw + $piEstGB * [int]$wantPi + $nodeEstGB * [int]$wantNode + 0.4 * [int]($wantClaude -or $wantCodex) + 0.02
+$needLocalGB = [math]::Round($dlEstGB + $extractEstGB + 2, 1)   # +2GB 余量（Ventoy 解压/日志等）
+$tempDrive = Get-PSDrive -Name ($env:TEMP.Substring(0, 1)) -ErrorAction SilentlyContinue
+if ($tempDrive -and $tempDrive.Free -lt ($needLocalGB * 1GB)) {
+    Die "本机系统盘（$($tempDrive.Name):）空间不足：制作需约 ${needLocalGB}GB 暂存（下载缓存 + 解压），当前仅剩 $([math]::Round($tempDrive.Free / 1GB, 1))GB。" '请清理系统盘（C 盘）临时文件后重试；下载缓存位于 %TEMP%\ai-repair-usb-maker\cache，30 天未用会自动清理。'
+}
+Write-Ok "本机暂存空间检查通过（预计需要约 ${needLocalGB}GB）"
 $downloads = @{}   # name -> 本地路径
 
 $selfMadeNames = @('ventoy', 'ai-repair-live', 'winpe', 'memtest86+')
@@ -624,7 +740,7 @@ foreach ($name in $selfMadeNames) {
             $url = $c.url
         }
 
-        $dest = Join-Path $Script:WorkDir $c.filename
+        $dest = Join-Path $Script:CacheDir $c.filename
         Get-FileViaBits -Url $url -Dest $dest -DisplayName "$($c.name) ($($c.filename))"
         Test-FileSha256 -Path $dest -Expected $c.sha256 -DisplayName $c.filename
         $downloads[$name] = $dest
@@ -646,7 +762,7 @@ if ($wantClaude) {
         $cm = (Get-WebTextWithRetry -Url "$($Script:ClaudeGcsBase)/$claudeVer/manifest.json" -TimeoutSec $Script:HttpTimeoutSec) | ConvertFrom-Json
         $Script:ClaudeExeSha256 = $cm.platforms.'win32-x64'.checksum
         if ([string]::IsNullOrWhiteSpace($Script:ClaudeExeSha256)) { throw 'manifest 缺少 win32-x64 checksum' }
-        $claudeDir = Join-Path $Script:WorkDir 'portable-bin'
+        $claudeDir = Join-Path $Script:CacheDir 'portable-bin'
         New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
         Write-Host "  便携版 claude $claudeVer（win32-x64，约 236MB）..."
         $Script:ClaudeExeLocal = Join-Path $claudeDir 'claude.exe'
@@ -662,7 +778,7 @@ if ($wantClaude) {
 }
 if ($wantClaude -or $wantCodex) {
     try {
-        $pgDir = Join-Path $Script:WorkDir 'portable-bin'
+        $pgDir = Join-Path $Script:CacheDir 'portable-bin'
         New-Item -ItemType Directory -Force -Path $pgDir | Out-Null
         Write-Host '  便携 Git（Bash 工具依赖，约 154MB）...'
         $MinGitLocal = Join-Path $pgDir 'PortableGit.zip'
@@ -682,7 +798,7 @@ $Script:CodexExeLocal = $null
 if ($wantCodex -and $codexComponent) {
     try {
         Write-Host "  Codex CLI $($codexComponent.version)（约 $($codexComponent.sizeBytes / 1MB)MB）..."
-        $Script:CodexExeLocal = Join-Path $Script:WorkDir $codexComponent.filename
+        $Script:CodexExeLocal = Join-Path $Script:CacheDir $codexComponent.filename
         Get-FileViaBits -Url $codexComponent.url -Dest $Script:CodexExeLocal -DisplayName "$($codexComponent.name) ($($codexComponent.filename))"
         Test-FileSha256 -Path $Script:CodexExeLocal -Expected $codexComponent.sha256 -DisplayName $codexComponent.filename
         Write-Ok 'Codex CLI 就绪（发布侧 sha256 校验通过）'
@@ -697,7 +813,7 @@ $DebianIsoLocal = $null
 if ($wantDebian) {
     try {
         Write-Host "  Debian 12 netinst（$DebianName，官方 cdimage 存档直链，约 650MB）..."
-        $DebianIsoLocal = Join-Path $Script:WorkDir $DebianName
+        $DebianIsoLocal = Join-Path $Script:CacheDir $DebianName
         Get-FileViaBits -Url $DebianUrl -Dest $DebianIsoLocal -DisplayName $DebianName
         Test-FileSha256 -Path $DebianIsoLocal -Expected $DebianSha256 -DisplayName $DebianName
         Write-Ok 'Debian 12 netinst 就绪（官方 SHA256SUMS 钉值校验通过）'
@@ -712,7 +828,7 @@ $Script:NodeZipLocal = $null; $Script:OpenclawTarLocal = $null; $Script:PiTarLoc
 if ($wantNode -and $nodeComponent) {
     try {
         Write-Host "  便携 Node $($nodeComponent.version)（约 $($nodeComponent.sizeBytes / 1MB)MB zip，解压后约 ${nodeEstGB}GB）..."
-        $Script:NodeZipLocal = Join-Path $Script:WorkDir $nodeComponent.filename
+        $Script:NodeZipLocal = Join-Path $Script:CacheDir $nodeComponent.filename
         Get-FileViaBITS -Url $nodeComponent.url -Dest $Script:NodeZipLocal -DisplayName "$($nodeComponent.name) ($($nodeComponent.filename))"
         Test-FileSha256 -Path $Script:NodeZipLocal -Expected $nodeComponent.sha256 -DisplayName $nodeComponent.filename
         Write-Ok '便携 Node 运行时就绪（官方 SHASUMS 钉值校验通过）'
@@ -724,7 +840,7 @@ if ($wantNode -and $nodeComponent) {
 if ($wantOpenclaw -and $openclawComponent) {
     try {
         Write-Host "  OpenClaw $($openclawComponent.version) 预装包（约 $($openclawComponent.sizeBytes / 1MB)MB tar.gz）..."
-        $Script:OpenclawTarLocal = Join-Path $Script:WorkDir $openclawComponent.filename
+        $Script:OpenclawTarLocal = Join-Path $Script:CacheDir $openclawComponent.filename
         Get-FileViaBITS -Url $openclawComponent.url -Dest $Script:OpenclawTarLocal -DisplayName "$($openclawComponent.name) ($($openclawComponent.filename))"
         Test-FileSha256 -Path $Script:OpenclawTarLocal -Expected $openclawComponent.sha256 -DisplayName $openclawComponent.filename
         Write-Ok 'OpenClaw 预装包就绪（发布侧 sha256 校验通过）'
@@ -736,7 +852,7 @@ if ($wantOpenclaw -and $openclawComponent) {
 if ($wantPi -and $piComponent) {
     try {
         Write-Host "  Pi $($piComponent.version) 预装包（约 $($piComponent.sizeBytes / 1MB)MB tar.gz）..."
-        $Script:PiTarLocal = Join-Path $Script:WorkDir $piComponent.filename
+        $Script:PiTarLocal = Join-Path $Script:CacheDir $piComponent.filename
         Get-FileViaBITS -Url $piComponent.url -Dest $Script:PiTarLocal -DisplayName "$($piComponent.name) ($($piComponent.filename))"
         Test-FileSha256 -Path $Script:PiTarLocal -Expected $piComponent.sha256 -DisplayName $piComponent.filename
         Write-Ok 'Pi 预装包就绪（发布侧 sha256 校验通过）'
@@ -788,7 +904,7 @@ foreach ($win in @(@{key='win10'; flag=$wantWin10; name='Windows 10'}, @{key='wi
     Write-Host "    正在向微软服务器请求 $($win.name) 官方下载直链 ..."
     try {
         $url = Get-MsIsoUrl -ProductPageUrl $c.sourceUrl -EditionKeyword $c.editionKeyword
-        $dest = Join-Path $Script:WorkDir $c.filename
+        $dest = Join-Path $Script:CacheDir $c.filename
         Get-FileViaBits -Url $url -Dest $dest -DisplayName "$($win.name) 官方 ISO"
         Test-FileSha256 -Path $dest -Expected $c.sha256 -DisplayName $c.filename
         $winIsoLocal[$win.key] = $dest
@@ -873,23 +989,39 @@ if (-not $dataPart.DriveLetter) {
     $dataPart | Set-Partition -NewDriveLetter $freeLetter
     $dataPart = Get-Partition -DiskNumber $targetDisk.Number -PartitionNumber $dataPart.PartitionNumber
 }
-$root = "$($dataPart.DriveLetter):\"
-Write-Ok "数据分区已挂载: $root"
+$Script:UsbRoot = "$($dataPart.DriveLetter):\"
+Write-Ok "数据分区已挂载: $Script:UsbRoot"
 
-New-Item -ItemType Directory -Force -Path (Join-Path $root 'ISO') | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $root 'ventoy') | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $root 'config') | Out-Null
+# 1.3.7 掉盘标识：Ventoy 已写完、盘符已定 → 在盘根写 nonce；掉盘重插后凭它与本机 cache\session-nonce 比对找回同一只盘
+# （全新 /I 会清盘，故必须等 Ventoy 段结束、数据分区确定之后才写）
+$Script:SessionNonce = [guid]::NewGuid().ToString('N')
+try {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText((Join-Path $Script:UsbRoot $Script:NonceFile), $Script:SessionNonce, $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $Script:CacheDir 'session-nonce'), $Script:SessionNonce, $utf8NoBom)
+} catch { Write-Warn "掉盘标识写入失败（$($_.Exception.Message)）——掉盘后将无法自动续拷，但制作不受影响。" }
+Write-Host ''
+Write-Host '    >>> 接下来开始向 U盘 写入文件，此步最慢（小文件多、U盘 写速有限），请勿拔盘 <<< ' -ForegroundColor Yellow
 
-# 拷入自产 ISO（robocopy 百分比进度；仅拷实际下载到的组件，未发布的自动跳过）
+New-Item -ItemType Directory -Force -Path (Join-Path $Script:UsbRoot 'ISO') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Script:UsbRoot 'ventoy') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Script:UsbRoot 'config') | Out-Null
+
+# 拷入自产 ISO（robocopy 百分比进度；仅拷实际下载到的组件，未发布的自动跳过；掉盘自动恢复+三振）
 foreach ($name in $selfMadeNames) {
     if ($name -eq 'ventoy' -or -not $downloads.ContainsKey($name)) { continue }
-    Copy-FileWithProgress $downloads[$name] (Join-Path $root 'ISO')
+    $src = $downloads[$name]
+    Invoke-UsbCopy -Label "镜像 $name" -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'ISO') }
 }
-foreach ($k in $winIsoLocal.Keys) { Copy-FileWithProgress $winIsoLocal[$k] (Join-Path $root 'ISO') }
+foreach ($k in $winIsoLocal.Keys) {
+    $src = $winIsoLocal[$k]
+    Invoke-UsbCopy -Label "Windows 镜像 $k" -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'ISO') }
+}
 
 # Debian 12 netinst（P-A A4：勾选且下载成功才拷入）
 if ($DebianIsoLocal -and (Test-Path $DebianIsoLocal)) {
-    Copy-FileWithProgress $DebianIsoLocal (Join-Path $root 'ISO')
+    $src = $DebianIsoLocal
+    Invoke-UsbCopy -Label "Debian 镜像" -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'ISO') }
     Write-Ok "已放入 Linux 安装镜像: $DebianName"
 }
 
@@ -913,10 +1045,10 @@ $ventoyJson = @{
     )
     boot_menu_alias = $aliasList
 } | ConvertTo-Json -Depth 5
-Set-Content -Path (Join-Path $root 'ventoy\ventoy.json') -Value $ventoyJson -Encoding UTF8
+Set-Content -Path (Join-Path $Script:UsbRoot 'ventoy\ventoy.json') -Value $ventoyJson -Encoding UTF8
 
 # config 骨架：Claude Code 配置与凭证占位（§2.2.4，token 由用户首次使用时自行写入）
-Set-Content -Path (Join-Path $root 'config\README.txt') -Encoding UTF8 -Value @"
+Set-Content -Path (Join-Path $Script:UsbRoot 'config\README.txt') -Encoding UTF8 -Value @"
 AI 电脑维修 U盘 配置目录
 - auth_token: 首次使用时由维修助手引导您创建，存放网关访问凭证
 - 请勿手动删除本目录
@@ -929,7 +1061,7 @@ foreach ($f in @('repair-on-windows.bat', 'repair-on-windows.ps1', 'AI-Workstati
     try {
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add('User-Agent', "ai-repair-usb-maker/$Script:ScriptVersion")
-        $wc.DownloadFile('https://usb.tokeneff.com/maker/' + $f, (Join-Path $root $f))
+        $wc.DownloadFile('https://usb.tokeneff.com/maker/' + $f, (Join-Path $Script:UsbRoot $f))
         Write-Ok "已放入 Windows 在线维修入口: $f"
     } catch {
         Write-Warn "$f 下载失败（Windows 在线维修入口缺失，不影响 U盘 启动维修）。网络恢复后重新制作即可补上。"
@@ -938,21 +1070,32 @@ foreach ($f in @('repair-on-windows.bat', 'repair-on-windows.ps1', 'AI-Workstati
 
 # 场景③便携运行时 → U盘 bin\（claude.exe 直跑 + MinGit 提供 bash；失败已在上游警告跳过）
 if ($Script:ClaudeExeLocal -and (Test-Path $Script:ClaudeExeLocal)) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $root 'bin') | Out-Null
-    Copy-FileWithProgress $Script:ClaudeExeLocal (Join-Path $root 'bin')
+    New-Item -ItemType Directory -Force -Path (Join-Path $Script:UsbRoot 'bin') | Out-Null
+    $src = $Script:ClaudeExeLocal
+    Invoke-UsbCopy -Label 'claude.exe' -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'bin') }
     Write-Ok '便携版 claude.exe 已放入 U盘 bin\'
 }
 if ($MinGitLocal -and (Test-Path $MinGitLocal)) {
-    $gitDest = Join-Path $root 'bin\PortableGit'
-    Write-Host '    解压便携 Git 到 U盘 bin\PortableGit ...'
-    Expand-WithProgress -Archive $MinGitLocal -DestDir $gitDest -Label 'PortableGit'
-    Write-Ok '便携 Git 已解压到 U盘 bin\PortableGit'
+    # 1.3.7 两段式：先解压到本机暂存（快、可重试），再整树拷入U盘（掉盘可恢复+对账）
+    $gitExtract = Join-Path $Script:ExtractDir 'PortableGit'
+    Write-Host '    解压便携 Git（本机暂存）...'
+    try {
+        if (Test-Path $gitExtract) { Remove-Item -Recurse -Force $gitExtract }
+        Expand-WithProgress -Archive $MinGitLocal -DestDir $gitExtract -Label 'PortableGit'
+        Invoke-UsbCopy -Label '便携 Git' -Action {
+            Copy-TreeWithRecovery -Source $gitExtract -Dest (Join-Path $Script:UsbRoot 'bin\PortableGit') -Label 'PortableGit'
+            Assert-TreeSynced -Source $gitExtract -Dest (Join-Path $Script:UsbRoot 'bin\PortableGit') -Label 'PortableGit' -EntryFiles @('bin\git.exe')
+        }
+        Write-Ok '便携 Git 已解压并拷入 U盘 bin\PortableGit'
+    } catch {
+        Write-Warn "便携 Git 落盘失败（$($_.Exception.Message)）。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+    }
 }
 
 # 办公助手人格（P-A A2/A4）：config\office\CLAUDE.md（勾选了 claude 才投放）
 if ($wantClaude) {
     try {
-        $officeDir = Join-Path $root 'config\office'
+        $officeDir = Join-Path $Script:UsbRoot 'config\office'
         New-Item -ItemType Directory -Force -Path $officeDir | Out-Null
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add('User-Agent', "ai-repair-usb-maker/$Script:ScriptVersion")
@@ -965,9 +1108,10 @@ if ($wantClaude) {
 $codexInstalledFinal = $false
 if ($Script:CodexExeLocal -and (Test-Path $Script:CodexExeLocal)) {
     try {
-        New-Item -ItemType Directory -Force -Path (Join-Path $root 'bin') | Out-Null
-        Copy-FileWithProgress $Script:CodexExeLocal (Join-Path $root 'bin') 'codex.exe'
-        $codexCfgDir = Join-Path $root 'config\codex'
+        New-Item -ItemType Directory -Force -Path (Join-Path $Script:UsbRoot 'bin') | Out-Null
+        $codexSrc = $Script:CodexExeLocal
+        Invoke-UsbCopy -Label 'Codex CLI' -Action { Copy-FileWithProgress $codexSrc (Join-Path $Script:UsbRoot 'bin') 'codex.exe' }
+        $codexCfgDir = Join-Path $Script:UsbRoot 'config\codex'
         New-Item -ItemType Directory -Force -Path $codexCfgDir | Out-Null
         $configToml = @'
 # Codex CLI 配置（制作器生成；AI 维修U盘 P-A）
@@ -996,17 +1140,20 @@ $haveTar = [bool](Get-Command tar.exe -ErrorAction SilentlyContinue)
 if (-not $haveTar) { Write-Warn '系统缺少 tar.exe（需 Win10 1803+），OpenClaw/Pi 无法解包，本次跳过（不阻断制作）。' }
 if ($Script:NodeZipLocal -and (Test-Path $Script:NodeZipLocal)) {
     try {
-        $nodeDir = Join-Path $root 'bin\node'
-        if (Test-Path $nodeDir) { Remove-Item -Recurse -Force $nodeDir }
-        Write-Host '  解压便携 Node ...'   # zip 内含 node-vXX-win-x64\ 顶层目录，解压后把内层挪到 bin\node
-        $tmpNode = Join-Path $Script:WorkDir 'node-extract'
-        if (Test-Path $tmpNode) { Remove-Item -Recurse -Force $tmpNode }
-        Expand-WithProgress -Archive $Script:NodeZipLocal -DestDir $tmpNode -Label '便携 Node'
-        $inner = Get-ChildItem -Directory $tmpNode | Select-Object -First 1
+        # 1.3.7 两段式：解压到本机暂存 → 定位内层目录 → 整树拷入U盘（禁止跨卷 Move；掉盘可恢复+对账）
+        Write-Host '  解压便携 Node（本机暂存）...'
+        $nodeStaging = Join-Path $Script:ExtractDir 'node'
+        if (Test-Path $nodeStaging) { Remove-Item -Recurse -Force $nodeStaging }
+        Expand-WithProgress -Archive $Script:NodeZipLocal -DestDir $nodeStaging -Label '便携 Node'
+        $inner = Get-ChildItem -Directory $nodeStaging | Select-Object -First 1
         if (-not $inner -or -not (Test-Path (Join-Path $inner.FullName 'node.exe'))) { throw 'zip 内未找到 node.exe' }
-        Move-Item $inner.FullName $nodeDir
+        $nodeSrc = $inner.FullName
+        Invoke-UsbCopy -Label '便携 Node' -Action {
+            Copy-TreeWithRecovery -Source $nodeSrc -Dest (Join-Path $Script:UsbRoot 'bin\node') -Label '便携 Node'
+            Assert-TreeSynced -Source $nodeSrc -Dest (Join-Path $Script:UsbRoot 'bin\node') -Label '便携 Node' -EntryFiles @('node.exe')
+        }
         $nodeInstalledFinal = $true
-        Write-Ok '已解压: bin\node\（便携 Node 运行时）'
+        Write-Ok '已落盘: bin\node\（便携 Node 运行时）'
     } catch {
         Write-Warn "便携 Node 落盘失败（$($_.Exception.Message)）。OpenClaw/Pi 将无法运行，不阻断制作。"
         $nodeInstalledFinal = $false
@@ -1014,15 +1161,18 @@ if ($Script:NodeZipLocal -and (Test-Path $Script:NodeZipLocal)) {
 }
 if ($Script:OpenclawTarLocal -and (Test-Path $Script:OpenclawTarLocal) -and $haveTar) {
     try {
-        $ocDir = Join-Path $root 'bin\openclaw'
-        if (Test-Path $ocDir) { Remove-Item -Recurse -Force $ocDir }
-        New-Item -ItemType Directory -Force -Path $ocDir | Out-Null
-        Write-Host '  解包 OpenClaw 预装包 ...'
-        # tar 内为 node_modules\ 顶层；exFAT 无 symlink，预装包已 --dereference 烤平
-        Expand-WithProgress -Archive $Script:OpenclawTarLocal -DestDir $ocDir -Label 'OpenClaw' -TarOnly -Lenient
-        if (-not (Test-Path (Join-Path $ocDir 'node_modules\openclaw\openclaw.mjs'))) { throw '入口 node_modules\openclaw\openclaw.mjs 缺失' }
+        # 1.3.7 两段式：解包到本机暂存再整树拷入；tar 内为 node_modules\ 顶层，exFAT 无 symlink，预装包已 --dereference 烤平
+        Write-Host '  解包 OpenClaw 预装包（本机暂存）...'
+        $ocStaging = Join-Path $Script:ExtractDir 'openclaw'
+        if (Test-Path $ocStaging) { Remove-Item -Recurse -Force $ocStaging }
+        Expand-WithProgress -Archive $Script:OpenclawTarLocal -DestDir $ocStaging -Label 'OpenClaw' -TarOnly -Lenient
+        if (-not (Test-Path (Join-Path $ocStaging 'node_modules\openclaw\openclaw.mjs'))) { throw '暂存入口 node_modules\openclaw\openclaw.mjs 缺失' }
+        Invoke-UsbCopy -Label 'OpenClaw' -Action {
+            Copy-TreeWithRecovery -Source $ocStaging -Dest (Join-Path $Script:UsbRoot 'bin\openclaw') -Label 'OpenClaw'
+            Assert-TreeSynced -Source $ocStaging -Dest (Join-Path $Script:UsbRoot 'bin\openclaw') -Label 'OpenClaw' -EntryFiles @('node_modules\openclaw\openclaw.mjs')
+        }
         $openclawInstalledFinal = $true
-        Write-Ok '已解包: bin\openclaw\（OpenClaw，入口 node_modules\openclaw\openclaw.mjs）'
+        Write-Ok '已落盘: bin\openclaw\（OpenClaw，入口 node_modules\openclaw\openclaw.mjs）'
     } catch {
         Write-Warn "OpenClaw 落盘失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
         $openclawInstalledFinal = $false
@@ -1030,28 +1180,31 @@ if ($Script:OpenclawTarLocal -and (Test-Path $Script:OpenclawTarLocal) -and $hav
 }
 if ($Script:PiTarLocal -and (Test-Path $Script:PiTarLocal) -and $haveTar) {
     try {
-        $piDir = Join-Path $root 'bin\pi'
-        if (Test-Path $piDir) { Remove-Item -Recurse -Force $piDir }
-        New-Item -ItemType Directory -Force -Path $piDir | Out-Null
-        Write-Host '  解包 Pi 预装包 ...'
-        Expand-WithProgress -Archive $Script:PiTarLocal -DestDir $piDir -Label 'Pi' -TarOnly -Lenient
-        if (-not (Test-Path (Join-Path $piDir 'node_modules\@mariozechner\pi-coding-agent\dist\cli.js'))) { throw '入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js 缺失' }
+        Write-Host '  解包 Pi 预装包（本机暂存）...'
+        $piStaging = Join-Path $Script:ExtractDir 'pi'
+        if (Test-Path $piStaging) { Remove-Item -Recurse -Force $piStaging }
+        Expand-WithProgress -Archive $Script:PiTarLocal -DestDir $piStaging -Label 'Pi' -TarOnly -Lenient
+        $piEntry = 'node_modules\@mariozechner\pi-coding-agent\dist\cli.js'
+        if (-not (Test-Path (Join-Path $piStaging $piEntry))) { throw "暂存入口 $piEntry 缺失" }
+        Invoke-UsbCopy -Label 'Pi' -Action {
+            Copy-TreeWithRecovery -Source $piStaging -Dest (Join-Path $Script:UsbRoot 'bin\pi') -Label 'Pi'
+            Assert-TreeSynced -Source $piStaging -Dest (Join-Path $Script:UsbRoot 'bin\pi') -Label 'Pi' -EntryFiles @('node_modules\@mariozechner\pi-coding-agent\dist\cli.js')
+        }
         $piInstalledFinal = $true
-        Write-Ok '已解包: bin\pi\（Pi，入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js）'
+        Write-Ok '已落盘: bin\pi\（Pi，入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js）'
     } catch {
         Write-Warn "Pi 落盘失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
         $piInstalledFinal = $false
     }
 }
 
-# 断盘哨兵：大文件解包是断盘高发段，之后确认 U盘还挂载着，不在就停下（人话报错，别让后续步骤撞出参数/驱动器类误导错误）
-if (-not (Test-Path (Join-Path $root 'config'))) {
-    Write-Host "    [错误] U盘在中途断开（$root 已不可访问）。这根盘不稳定，建议换盘后重做；已写入的部分无需保留。" -ForegroundColor Red
-    exit 1
+# 断盘哨兵（1.3.7 改造）：config 不可访问=掉盘 → 走恢复路径找回同一只盘续拷（已写入部分全部保留）
+if (-not (Test-Path (Join-Path $Script:UsbRoot 'config'))) {
+    Wait-UsbReturn | Out-Null
 }
 
 # 制作时签发 USB token（可选步骤：邮箱验证 → 写 config\auth_token；可跳过，失败不阻塞）
-Initialize-UsbToken -Root $root
+Initialize-UsbToken -Root $Script:UsbRoot
 
 # agents.json / isos.json（P-A A4：挂载后生成，启动器据此显隐入口）
 # 语义（与设计 §4.0 对齐）：
@@ -1100,8 +1253,12 @@ if ($DebianIsoLocal -and (Test-Path $DebianIsoLocal)) {
     }
 }
 try {
-    [IO.File]::WriteAllText((Join-Path $root 'config\agents.json'), ($agentsObj | ConvertTo-Json -Depth 4))
-    [IO.File]::WriteAllText((Join-Path $root 'config\isos.json'), ($isosObj | ConvertTo-Json -Depth 4))
+    # 1.3.7 原子写：先写同目录 tmp 再原子替换（掉盘发生在两步之间不会留下半截 agents.json；tmp 覆盖写不额外清理）
+    $agentsTmp = Join-Path $Script:UsbRoot 'config\agents.json.tmp'
+    [IO.File]::WriteAllText($agentsTmp, ($agentsObj | ConvertTo-Json -Depth 4))
+    Move-Item -LiteralPath $agentsTmp -Destination (Join-Path $Script:UsbRoot 'config\agents.json') -Force
+    # isos.json 无 installed 状态语义（豁免原子写）
+    [IO.File]::WriteAllText((Join-Path $Script:UsbRoot 'config\isos.json'), ($isosObj | ConvertTo-Json -Depth 4))
     Write-Ok '已写入: config\agents.json + config\isos.json（AI 引擎勾选记录）'
 } catch { Write-Warn "agents.json/isos.json 写入失败（$($_.Exception.Message)）。不影响启动，但启动器菜单将不显示 Codex 项。" }
 
@@ -1109,50 +1266,53 @@ Write-Ok '镜像与配置拷入完成'
 
 # ---------------- 10. 逐文件 SHA256 复核（盘上文件重读校验，§2.5.3-6） ----------------
 Write-Step '正在做最终校验 ...'
+Write-Host '    正在等待杀毒软件扫描完成，可能需要几分钟，请勿拔盘 ...' -ForegroundColor DarkGray
 foreach ($name in $selfMadeNames) {
     $c = Get-Component $name
     if ($name -eq 'ventoy') { continue }             # ventoy 包本身已解压写入，不重复校验
     if (-not $downloads.ContainsKey($name)) { continue }   # 未发布组件（winpe/memtest86+）未拷入，跳过
-    Test-FileSha256 -Path (Join-Path $root ('ISO\' + $c.filename)) -Expected $c.sha256 -DisplayName $c.filename
+    Test-FileSha256 -Path (Join-Path $Script:UsbRoot ('ISO\' + $c.filename)) -Expected $c.sha256 -DisplayName $c.filename
 }
 foreach ($k in $winIsoLocal.Keys) {
     $c = $manifest.components | Where-Object { $_.name -eq $k } | Select-Object -First 1
-    Test-FileSha256 -Path (Join-Path $root ('ISO\' + $c.filename)) -Expected $c.sha256 -DisplayName $c.filename
+    Test-FileSha256 -Path (Join-Path $Script:UsbRoot ('ISO\' + $c.filename)) -Expected $c.sha256 -DisplayName $c.filename
 }
 # 便携版 claude.exe 盘上重读复核（拷贝过程损坏会导致目标电脑静默回落在线安装，务必校验）
-if ($Script:ClaudeExeLocal -and (Test-Path (Join-Path $root 'bin\claude.exe'))) {
-    Test-FileSha256 -Path (Join-Path $root 'bin\claude.exe') -Expected $Script:ClaudeExeSha256 -DisplayName 'bin\claude.exe'
+if ($Script:ClaudeExeLocal -and (Test-Path (Join-Path $Script:UsbRoot 'bin\claude.exe'))) {
+    Test-FileSha256 -Path (Join-Path $Script:UsbRoot 'bin\claude.exe') -Expected $Script:ClaudeExeSha256 -DisplayName 'bin\claude.exe'
 }
 # Codex 盘上复核（P-A A4：勾选且已落盘才校验；未勾选不得因缺失报错）
 if ($codexInstalledFinal) {
-    Test-FileSha256 -Path (Join-Path $root 'bin\codex.exe') -Expected $codexComponent.sha256 -DisplayName 'bin\codex.exe'
-    if (-not (Test-Path (Join-Path $root 'config\codex\config.toml'))) { Die 'config\codex\config.toml 缺失。' '请重新运行制作器。' }
+    Test-FileSha256 -Path (Join-Path $Script:UsbRoot 'bin\codex.exe') -Expected $codexComponent.sha256 -DisplayName 'bin\codex.exe'
+    if (-not (Test-Path (Join-Path $Script:UsbRoot 'config\codex\config.toml'))) { Die 'config\codex\config.toml 缺失。' '请重新运行制作器。' }
 }
 # Debian 盘上复核（P-A A4：勾选且已拷入才校验）
-if ($DebianIsoLocal -and (Test-Path (Join-Path $root ('ISO\' + $DebianName)))) {
-    Test-FileSha256 -Path (Join-Path $root ('ISO\' + $DebianName)) -Expected $DebianSha256 -DisplayName $DebianName
+if ($DebianIsoLocal -and (Test-Path (Join-Path $Script:UsbRoot ('ISO\' + $DebianName)))) {
+    Test-FileSha256 -Path (Join-Path $Script:UsbRoot ('ISO\' + $DebianName)) -Expected $DebianSha256 -DisplayName $DebianName
 }
 # Node / OpenClaw / Pi 盘上复核（P-B：勾选且已落盘才校验；解压产物无法整树 sha，校验关键入口存在性）
-if ($nodeInstalledFinal -and -not (Test-Path (Join-Path $root 'bin\node\node.exe'))) { Die 'bin\node\node.exe 缺失。' '请重新运行制作器。' }
-if ($openclawInstalledFinal -and -not (Test-Path (Join-Path $root 'bin\openclaw\node_modules\openclaw\openclaw.mjs'))) { Die 'bin\openclaw 入口缺失。' '请重新运行制作器。' }
-if ($piInstalledFinal -and -not (Test-Path (Join-Path $root 'bin\pi\node_modules\@mariozechner\pi-coding-agent\dist\cli.js'))) { Die 'bin\pi 入口缺失。' '请重新运行制作器。' }
+if ($nodeInstalledFinal -and -not (Test-Path (Join-Path $Script:UsbRoot 'bin\node\node.exe'))) { Die 'bin\node\node.exe 缺失。' '请重新运行制作器。' }
+if ($openclawInstalledFinal -and -not (Test-Path (Join-Path $Script:UsbRoot 'bin\openclaw\node_modules\openclaw\openclaw.mjs'))) { Die 'bin\openclaw 入口缺失。' '请重新运行制作器。' }
+if ($piInstalledFinal -and -not (Test-Path (Join-Path $Script:UsbRoot 'bin\pi\node_modules\@mariozechner\pi-coding-agent\dist\cli.js'))) { Die 'bin\pi 入口缺失。' '请重新运行制作器。' }
 
 # ---------------- 11. 完成 ----------------
+# 1.3.7：清一次性解压暂存；下载缓存保留（下次/换盘重跑免重新下载，30 天未用自动清理）
+Remove-Item -LiteralPath $Script:ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host '===============================================' -ForegroundColor Green
 Write-Host '  制作完成，可以拔下使用了！' -ForegroundColor Green
 Write-Host '===============================================' -ForegroundColor Green
 Write-Host ''
 Write-Host '使用方法: 将 U盘 插入需要维修的电脑 → 开机按启动菜单键(F12/F9/Esc) → 选择 U盘 启动'
-if (Test-Path (Join-Path $root 'AI-Workstation.bat')) {
-    if (Test-Path (Join-Path $root 'bin\claude.exe')) {
+if (Test-Path (Join-Path $Script:UsbRoot 'AI-Workstation.bat')) {
+    if (Test-Path (Join-Path $Script:UsbRoot 'bin\claude.exe')) {
         Write-Host '电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在 Windows 内维修 / 办公助手（免安装直跑，无需重启）'
     } else {
         Write-Host '电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在线维修（首次将在线安装 claude）'
     }
     if ($codexInstalledFinal) { Write-Host '模式菜单内可用 Codex CLI（OpenAI 风格命令行助手）' }
 }
-if ($DebianIsoLocal -and (Test-Path (Join-Path $root ('ISO\' + $DebianName)))) {
+if ($DebianIsoLocal -and (Test-Path (Join-Path $Script:UsbRoot ('ISO\' + $DebianName)))) {
     Write-Host '已附带 Debian 12 netinst: U盘 启动菜单选择「安装 Debian 12」即可装 Linux'
 }
 if ($wantWin10 -or $wantWin11) {

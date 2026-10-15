@@ -247,12 +247,19 @@ grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启�
 grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
 [[ $S73 -eq 1 ]] && ok "启动器 0.4.0：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
 
-# 检查 7-4：制作器版本 ps1 1.3.6 + sh 1.3.4
-grep -q "ScriptVersion   = '1.3.6'" "$MAKER/usb-v1.0.ps1" && grep -q 'SCRIPT_VERSION="1.3.4"' "$MAKER/usb-v1.0.sh" \
-  && ok "两制作器版本 ps1 1.3.6 + sh 1.3.4（P-B + 进度心跳 + 解压容错 + 断盘哨兵）" || bad "制作器版本号未升至预期"
-# 1.3.5：robocopy 保留源文件名 → codex 必须拷后改名 codex.exe，否则最终校验 bin\codex.exe 必炸
-grep -q "Copy-FileWithProgress \$Script:CodexExeLocal.*'codex.exe'" "$MAKER/usb-v1.0.ps1" \
-  && ok "ps1 codex 落盘改名 codex.exe（robocopy 原名修复）" || bad "ps1 codex 落盘未改名，最终校验会找不到 bin\\codex.exe"
+# 检查 7-4：制作器版本 1.3.7（四处全改：ps1 头注释+常量、sh 头注释+常量）
+S74=1
+grep -q "^# usb-v1.0.ps1 版本: 1.3.7" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 头注释版本未升 1.3.7"; }
+grep -q "ScriptVersion   = '1.3.7'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 常量版本未升 1.3.7"; }
+grep -q "^# usb-v1.0.sh 版本: 1.3.7" "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 头注释版本未升 1.3.7"; }
+grep -q 'SCRIPT_VERSION="1.3.7"' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 常量版本未升 1.3.7"; }
+# 1.3.5 遗留：codex 拷后改名 codex.exe（robocopy 保留源文件名，不改名最终校验 bin\codex.exe 必炸）
+grep -q "Copy-FileWithProgress \$codexSrc (Join-Path \$Script:UsbRoot 'bin') 'codex.exe'" "$MAKER/usb-v1.0.ps1" \
+  || { S74=0; bad "ps1 codex 落盘未改名 codex.exe"; }
+# 三振/降级语义锚：降级分支（确定性失败）保留 Write-Warn + installedFinal = $false，不得被三振 Die 吞掉
+grep -q 'Write-Warn "OpenClaw 落盘失败' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 OpenClaw 降级分支（Write-Warn）缺失"; }
+grep -q 'openclawInstalledFinal = \$false' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 installedFinal = \$false 降级语义缺失"; }
+[[ $S74 -eq 1 ]] && ok "两制作器版本 1.3.7（四处）+ codex 改名 + 降级语义锚"
 
 # 检查 7-5：解压进度心跳 + exFAT 容错（1.3.2）
 S75=1
@@ -264,6 +271,55 @@ grep -q 'extract_progress' "$MAKER/usb-v1.0.sh" || { S75=0; bad "usb-v1.0.sh 缺
 grep -q "\$ProgressPreference = 'Continue'" "$MAKER/usb-v1.0.ps1" || { S75=0; bad "ps1 Expand-WithProgress 未恢复 ProgressPreference（进度条被全局静默压制）"; }
 grep -q '\$ProgressPreference = \$prevProgress' "$MAKER/usb-v1.0.ps1" || { S75=0; bad "ps1 Expand-WithProgress 未还原 ProgressPreference（会拖慢后续 BITS 下载）"; }
 [[ $S75 -eq 1 ]] && ok "两制作器：解压进度心跳 + 容错（tar.exe/Write-Progress、du 轮询、入口判定）"
+
+# 检查 7-6：掉盘鲁棒性 1.3.7（缓存保留 / 两段式 / 恢复 / 对账 / 原子写 / 文案）
+S76=1
+# 拷贝旗标：ps1 无 /Z 无 /MT:（多线程在 flaky USB 上放大失败面）
+grep -q '/MT:' "$MAKER/usb-v1.0.ps1" && { S76=0; bad "ps1 仍有 robocopy /MT:"; }
+grep -q 'robocopy.*/Z[^a-zA-Z]' "$MAKER/usb-v1.0.ps1" && { S76=0; bad "ps1 出现 robocopy /Z"; }
+# ps1 掉盘判定：robocopy 退出码 ≥8 + Test-Path 盘符检测 + 恢复函数 + 三振 Die
+grep -q '\-ge 8' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 缺 robocopy ≥8 失败判定"; }
+grep -q 'function Wait-UsbReturn' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 缺 Wait-UsbReturn 恢复函数"; }
+grep -q 'function Invoke-UsbCopy' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 缺 Invoke-UsbCopy 三振包装器"; }
+grep -q '连续失败 3 次\|连续失败 \${fail} 次' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 三振 Die 文案缺失"; }
+# 拷贝段进度：Copy-TreeWithRecovery 内 Write-Progress 轮询 + 完成只认退出码
+grep -q 'function Copy-TreeWithRecovery' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 缺 Copy-TreeWithRecovery"; }
+awk '/function Copy-TreeWithRecovery/,/^}/' "$MAKER/usb-v1.0.ps1" | grep -q 'Write-Progress' \
+  || { S76=0; bad "Copy-TreeWithRecovery 缺 Write-Progress 轮询（10k 文件拷贝会被当假死）"; }
+# 对账 + 原子写
+grep -q 'function Assert-TreeSynced' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 缺 Assert-TreeSynced 三对账"; }
+grep -q "agents.json.tmp" "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 agents.json 未原子写"; }
+# nonce：写盘动作在 Ventoy 段之后（行号序；常量定义行不算）
+NP1=$(grep -n 'Write-Ok .Ventoy 引导层写入完成' "$MAKER/usb-v1.0.ps1" | head -1 | cut -d: -f1)
+NP2=$(grep -n 'WriteAllText((Join-Path $Script:UsbRoot $Script:NonceFile)' "$MAKER/usb-v1.0.ps1" | head -1 | cut -d: -f1)
+[ -n "$NP1" ] && [ -n "$NP2" ] && [ "$NP2" -gt "$NP1" ] || { S76=0; bad "ps1 nonce 写入时机不在 Ventoy 段之后"; }
+# ps1 收尾文案（此步最慢请勿拔盘 / 杀软扫描等待）
+grep -q '请勿拔盘' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 缺「请勿拔盘」文案"; }
+grep -q '杀毒软件扫描' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 缺杀软扫描等待文案"; }
+
+# sh 侧：CACHE 固定路径 + trap 不清缓存 + 全部下载段 dest 含 $CACHE + mountpoint 判定 + rsync 旗标 + 原子写
+grep -q 'CACHE="${HOME}/.cache/ai-repair-usb-maker"' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh CACHE 未固定到 ~/.cache"; }
+grep "trap .*EXIT" "$MAKER/usb-v1.0.sh" | grep -q '\$CACHE' && { S76=0; bad "sh trap 泄漏引用 \$CACHE（缓存会被误删）"; }
+# 下载段 dest 均指 $CACHE：§6 主循环 + 6.5/6.6/6.7/6.8 的 fetch_retry/cache_hit 目标
+for pat in 'dest="${CACHE}/${fname}"' 'portable-bin/TempClaude.exe' 'portable-bin/TempPortableGit.zip' \
+           '"${CACHE}/codex-download.exe"' '"${CACHE}/${DEBIAN_NAME}"' '"${CACHE}/${NODE_FNAME}"' \
+           '"${CACHE}/${OC_FNAME}"' '"${CACHE}/${PI_FNAME}"'; do
+  grep -q -- "$pat" "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 下载段 dest 未指向缓存: $pat"; }
+done
+grep -q 'cache_hit ' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 缺 cache_hit 缓存命中检查"; }
+# 掉盘判定：mountpoint（而非 [ -d "$MNT" ]）+ umount -l 兜底 + nonce 重定位 + 三振
+grep -q 'mountpoint -q "$MNT"' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 缺 mountpoint 挂载态检测"; }
+grep -q '\[ -d "\$MNT" \]' "$MAKER/usb-v1.0.sh" && { S76=0; bad "sh 仍有 [ -d \"\$MNT\" ] 掉盘判定（恒真，检测不到掉盘）"; }
+grep -q 'umount -l "$MNT"' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 缺 umount -l lazy 兜底"; }
+grep -q '连续失败' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 三振 Die 文案缺失"; }
+# rsync 旗标串（含 -rt --partial --inplace，无 --no-times）
+grep -q -- '-rt --partial --inplace --no-perms --no-owner' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh rsync 旗标串缺失"; }
+grep -q -- '--no-times' "$MAKER/usb-v1.0.sh" && { S76=0; bad "sh rsync 带 --no-times（对账用 mtime，禁止）"; }
+# sh 三对账 + 原子写 + nonce
+grep -q 'assert_tree_synced' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 缺三对账函数"; }
+grep -q 'agents.json.tmp' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh agents.json 未原子写"; }
+grep -q '\.ai-repair-maker-session' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 缺 nonce 标识文件"; }
+[[ $S76 -eq 1 ]] && ok "1.3.7 掉盘鲁棒性：缓存保留+两段式+恢复+对账+原子写（双侧）"
 
 echo
 echo "=== 结果：通过 $PASS 项 / 失败 $FAIL 项 ==="
