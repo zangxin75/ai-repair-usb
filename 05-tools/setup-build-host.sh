@@ -61,5 +61,5 @@ fi
 
 echo
 echo "=== 构建机就绪 ==="
-echo "下一步：cd 05-执行工具/live-build-config && sudo bash build.sh"
+echo "下一步：cd 05-tools/live-build-config && sudo bash build.sh"
 echo "注意：WSL2 不适合跑 lb build（缺 loop 设备支持），请在实体机/完整虚拟机中构建。"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # smoke.sh — Live 端脚本最小运行级冒烟测试（实施计划 R8a）
 # 用途：在构建机上用 mock 夹具运行各脚本的可测逻辑，在真机验收前拦截运行级缺陷
-# 用法：bash tests/smoke.sh   （在项目 05-执行工具/ 目录下执行）
+# 用法：bash tests/smoke.sh   （在项目 05-tools/ 目录下执行）
 set -uo pipefail
 
 cd "$(dirname "$0")/.."

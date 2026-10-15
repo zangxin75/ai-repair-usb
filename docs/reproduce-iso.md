@@ -1,58 +1,65 @@
-# 从零复现维修系统 ISO（陌生人视角）
+# Reproduce the repair-system ISO (stranger's view)
 
-目标：在一台 Debian 12 实体机/VM 上，从源码构建出与官方 Release 等价的 `AI-Repair-Live-*.iso`。WSL2 不行（缺 loop 设备）。
+Goal: build an `AI-Repair-Live-*.iso` from source on a Debian 12 host, byte-equivalent to the official release. WSL2 is **not** supported (no loop device).
 
-## 0. 准备
+> Chinese version of this guide: [reproduce-iso.zh-CN.md](reproduce-iso.zh-CN.md).
 
-- Debian 12 x86_64 主机，≥40GB 空闲盘，能访问 Debian 镜像源
-- clone 本仓
+## 0. Prerequisites
+
+- Debian 12 x86_64 host, ≥40 GB free disk, network access to a Debian mirror
+- This repository cloned
 
 ```bash
 git clone https://github.com/zangxin75/ai-repair-usb.git && cd ai-repair-usb
 ```
 
-## 1. 构建机依赖
+## 1. Build-host dependencies
 
 ```bash
 sudo bash setup-build-host.sh
 ```
 
-装的是 live-build、内核与固件包、squashfs-tools、xorriso 等构建依赖（幂等，可重复执行）。
+Installs `live-build`, kernel/firmware, `squashfs-tools`, `xorriso`, and other build deps. Idempotent — re-runnable.
 
-## 2. 构建
+## 2. Build
 
 ```bash
-cd 05-执行工具/live-build-config
-sudo bash build.sh            # 首次 ~30-60 分钟（取决于网络）
+cd 05-tools/live-build-config
+sudo bash build.sh            # first run ~30-60 min (network-bound)
 ```
 
-改过 `hooks/` / `package-lists/` 后重构建，先清理脏状态（保留缓存）：
+If you modified `hooks/` or `package-lists/`, clear stale state first (keep the cache):
 
 ```bash
 sudo rm -rf .build chroot binary*
 sudo bash build.sh
 ```
 
-产物在 `images/`（或构建输出目录），附 `.sha256`。
+Output lands in `images/` (or the build's output dir) with an `.sha256` sidecar.
 
-## 3. 验证
+## 3. Verify
 
 ```bash
 sha256sum -c *.sha256
-# 关键内容抽查（内核 / squashfs / claude-code 二进制在盘）
+# Spot-check key contents (kernel / squashfs / claude-code binary on the stick)
 ```
 
-## 4. 常见坑（实战排雷记录）
+## 4. Known pitfalls (from the field)
 
-| 坑 | 解法 |
+| Pitfall | Fix |
 |---|---|
-| 国内拉 deb.debian.org 极慢 | `auto/config` 已锁国内镜像，别改回官方源 |
-| claude-code 2.x 是原生 ELF（Bun 编译 ~235MB），npm 主包里只有 500B 占位符 | `build.sh` 用 `npm install` 让 postinstall 自动拼装平台包 `@anthropic-ai/claude-code-linux-x64`；手动路径见 `update-claude.sh`（>10MB 体积校验防占位符） |
-| live 用户首次开机才由 live-config 创建 | hook 里不要 passwd/useradd（已做 `id` 幂等防护） |
-| bookworm 没有 `firmware-mediatek` | 用 `firmware-misc-nonfree` |
+| `deb.debian.org` is painfully slow from China | `auto/config` is pinned to a domestic mirror — don't switch it back |
+| `claude-code` 2.x is a native ELF (Bun-built, ~235 MB); the npm main tarball only has a 500 B placeholder | `build.sh` uses `npm install` so the postinstall hook assembles the platform package `@anthropic-ai/claude-code-linux-x64` automatically. For manual paths see `update-claude.sh` (size check >10 MB guards against placeholder leakage) |
+| The `live` user is created by live-config on **first boot**, not during chroot | Don't `passwd` / `useradd` it in hooks — the scripts use an `id` idempotency guard |
+| `firmware-mediatek` doesn't exist on bookworm | Use `firmware-misc-nonfree` instead |
 
-## 5. 不构建 ISO，只想试脚本？
+## 5. Don't want to build the ISO? Just exercise the scripts
 
 ```bash
-cd 05-执行工具 && bash tests/smoke.sh   # 15 项断言，全 mock，CI 同款
+cd 05-tools && bash tests/smoke.sh   # 15 assertions, all mocked, same suite CI runs
 ```
+
+## See also
+
+- [README.md](../README.md) — project overview, quick start
+- [docs/self-hosted-gateway.md](self-hosted-gateway.md) — 10-minute LiteLLM setup

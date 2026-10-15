@@ -60,7 +60,7 @@ cd live-build-config && sudo bash build.sh
 bash tests/smoke.sh                # 15/15 no-hardware smoke tests
 ```
 
-Full story in [05-执行工具/](05-执行工具/) (Chinese; English docs in progress — PRs welcome!).
+Full story in [05-tools/](05-tools/) (Chinese; English docs in progress — PRs welcome!).
 
 ## Safety & disclaimer
 
@@ -76,7 +76,7 @@ Full story in [05-执行工具/](05-执行工具/) (Chinese; English docs in pro
 - [ ] v0.4 — portable Node + OpenClaw + Pi (portable multi-agent workstation)
 - [ ] WinPE builder, repair-record system, English docs
 
-See [01-项目规划/README.md](01-项目规划/README.md) for the full plan (Chinese).
+See [01-planning/README.md](01-planning/README.md) for the full plan (Chinese).
 
 ## Contributing
 

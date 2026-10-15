@@ -60,7 +60,7 @@ cd live-build-config && sudo bash build.sh
 bash tests/smoke.sh                # 15/15 无硬件冒烟测试
 ```
 
-完整方案见 [01-项目规划/README.md](01-项目规划/README.md)。
+完整方案见 [01-planning/README.md](01-planning/README.md)。
 
 ## 安全与免责
 

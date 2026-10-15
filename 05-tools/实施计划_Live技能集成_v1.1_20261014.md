@@ -4,7 +4,7 @@
 - 版本：v1.1（按 critic 首轮审计修订：4 MAJOR + 4 MINOR，修订记录见文末；critic 判定修完 4 MAJOR 可直接 ACCEPT）
 - 状态：已修订，待复审
 - 作者：kt + Claude Code
-- 上游设计：`04-技术方案/技术方案_Live内置Claude技能集成_v1.1_20261014.md`（复审 ACCEPT 9/10）
+- 上游设计：`04-design/技术方案_Live内置Claude技能集成_v1.1_20261014.md`（复审 ACCEPT 9/10）
 
 ## 0. 范围与前置
 
@@ -18,7 +18,7 @@
 ## 1. 阶段划分
 
 ### S1 原文存档（0.5h）
-- 取 obra/superpowers（MIT）的 systematic-debugging、verification-before-completion 原文落盘 `05-执行工具/research/superpowers-originals/`，附 LICENSE 副本（改写依据 + 版权合规 + K0 抽查对照）。
+- 取 obra/superpowers（MIT）的 systematic-debugging、verification-before-completion 原文落盘 `05-tools/research/superpowers-originals/`，附 LICENSE 副本（改写依据 + 版权合规 + K0 抽查对照）。
 - 验收：两个原文文件 + LICENSE 存在。
 
 ### S2 编写 6 个 SKILL.md（4h，核心工作量，v1.1 按审计调估）
@@ -75,7 +75,7 @@
 1. smoke **22/22** 绿（S3 实测：基线 16 项 + 新节 6 条断言；故障注入 5 用例逐一验证 FAIL→还原→22/22）；
 2. v0.3 ISO 构建成功、双端 sha256 一致、线上可下载且 manifest（1.0.3）指向正确；
 3. K0 正负例触发全过 + /context 开销数据记录 + 不变式抽查通过；
-4. 设计文档遗留清单回填、`01-项目规划/README.md` 进度更新；
+4. 设计文档遗留清单回填、`01-planning/README.md` 进度更新；
 5. 两仓变更待用户指令再 commit。
 
 ## 3. 风险与回退

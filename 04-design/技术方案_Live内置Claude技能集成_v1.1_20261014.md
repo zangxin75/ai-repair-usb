@@ -103,7 +103,7 @@ install-windows.sh 已有盘选择防护与二次确认，本技能补 AI 侧护
 ### 4.1 文件位置与构建链
 
 ```
-05-执行工具/build/live/etc/skel/.claude/skills/
+05-tools/build/live/etc/skel/.claude/skills/
 ├── systematic-debugging/SKILL.md
 ├── verification-before-completion/SKILL.md
 ├── smart-diagnosis/SKILL.md

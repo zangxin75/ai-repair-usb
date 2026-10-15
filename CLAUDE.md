@@ -7,14 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 AI 电脑维修 U盘：Ventoy 多启动 U盘 + 定制 Debian 12 Live ISO（内置 Claude Code，经 tokeneff.com 网关接入）+ Windows 10/11 镜像。启动后自动进入中文交互界面（选择式菜单优先，对话兜底），服务家庭维护/上门维修/装机部署三类用户。
 
 **权威文档**（改代码前先读）：
-- `04-技术方案/技术方案_AI电脑维修U盘_总体设计_20260912.md` — 总体设计 V1.5 定稿（三轮 critic 审计）
-- `05-执行工具/实施计划_AI电脑维修U盘_20260912.md` — 实施计划 V1.4 定稿（P0~P8 阶段划分）
-- `01-项目规划/README.md` — 项目索引与进度
+- `04-design/技术方案_AI电脑维修U盘_总体设计_20260912.md` — 总体设计 V1.5 定稿（三轮 critic 审计）
+- `05-tools/实施计划_AI电脑维修U盘_20260912.md` — 实施计划 V1.4 定稿（P0~P8 阶段划分）
+- `01-planning/README.md` — 项目索引与进度
 
 ## 常用命令
 
 ```bash
-# 冒烟测试（在 05-执行工具/ 下运行，mock 夹具，不碰真机）
+# 冒烟测试（在 05-tools/ 下运行，mock 夹具，不碰真机）
 bash tests/smoke.sh
 
 # 构建机准备（Debian 12 实体机/VM；WSL2 不能跑 lb build——缺 loop 设备）
@@ -42,7 +42,7 @@ dist/AI-Repair-Live-v0.1-20260912.iso + .sha256（git 忽略 *.iso，产物不�
 ## 代码架构（三个层次）
 
 ```
-05-执行工具/
+05-tools/
 ├── build/live/usr/local/bin/    # Live 端维修脚本【权威源】——welcome.sh 是编排入口
 ├── build/live/usr/local/share/tasks/  # 菜单选项 → claude 初始提示词文本
 ├── build/live/etc/skel/.claude/CLAUDE.md  # Live 内 AI 的系统提示词（与 live-build-config 内副本必须保持一致）
@@ -77,9 +77,9 @@ remote URL 不含凭证。推送用一次性 PAT URL（用完即弃，不写入 
 
 ## 文档规范（用户全局 CLAUDE.md 强制）
 
-- 新文档按类型入 `01-项目规划/ … 06-会议记录/`，命名 `[类型]_[项目名]_[日期].md`，不得放根目录
+- 新文档按类型入 `01-planning/ … 06-会议记录/`，命名 `[类型]_[项目名]_[日期].md`，不得放根目录
 - 每篇文档含：创建日期 / 版本 / 状态 / 作者
-- 关键交付物同步更新 `01-项目规划/README.md` 进度
+- 关键交付物同步更新 `01-planning/README.md` 进度
 
 ## 审计工作流
 

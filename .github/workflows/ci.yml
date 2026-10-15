@@ -14,4 +14,4 @@ jobs:
           find . -name '*.sh' -not -path './.git/*' -exec shellcheck -S error {} \;
       - name: 冒烟测试（无硬件）
         run: |
-          cd 05-执行工具 && bash tests/smoke.sh
+          cd 05-tools && bash tests/smoke.sh
