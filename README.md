@@ -1,6 +1,6 @@
 # AI Repair USB — a whole AI repair shop on one stick 🛠️
 
-> Boot a dead PC into a Chinese-language AI repair system. Plug the same stick into a healthy PC and get a portable AI workstation — Claude Code, Codex CLI, and more, zero install, zero residue.
+> Boot a dead PC into a Chinese-language AI repair system. Plug the same stick into a healthy PC and get a portable AI workstation — Claude Code, Codex CLI, and more, zero install, zero residue. **Your tools follow you, not your machines.**
 
 [![Release](https://img.shields.io/badge/release-v0.3-blue.svg)](../../releases) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![简体中文](https://img.shields.io/badge/README-简体中文-red.svg)](README.zh-CN.md)
 
