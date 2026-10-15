@@ -1,8 +1,9 @@
-# repair-on-windows.ps1 版本: 0.3.0  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+# repair-on-windows.ps1 版本: 0.4.0  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
-# 版本: 0.3.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
+# 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
 #        Codex CLI 入口按 agents.json 显隐；多Agent工作站 P-A A2）
+# 0.4.0（P-B）：+OpenClaw / Pi 入口（便携 Node 运行时 + 自包含预装包，入口直启 node cli；状态目录重定向 U盘）
 #        0.2.0（0.1.0 + 便携模式：U盘 bin\claude.exe 优先直跑、免安装；缺失/损坏回落在线安装）
 #        0.1.0（W1 骨架 + W2 激活/余额/验证接入，RDD 需求表 R1-R41）
 # 状态: 草稿（待 K1a 真机验收；网关 /api/usb/* 按 5.4 契约编码，未上线前靠 mock 驱动）
@@ -20,7 +21,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.3.0'
+$Script:ScriptVersion   = '0.4.0'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -423,6 +424,9 @@ if (Test-Path $agentsPath) {
 $Script:ClaudeDeclined = $false
 $Script:CodexInstalled = $false
 $Script:CodexDeclined  = $false
+$Script:NodeInstalled  = $false
+$Script:OpenclawInstalled = $false; $Script:OpenclawDeclined = $false
+$Script:PiInstalled      = $false; $Script:PiDeclined = $false
 if ($Script:Agents) {
     if ($Script:Agents.PSObject.Properties['claude'] -and $Script:Agents.claude.userDeclined -eq $true) {
         $Script:ClaudeDeclined = $true
@@ -431,6 +435,18 @@ if ($Script:Agents) {
         # installed=true → 可启动；userDeclined=true（未装）→ 灰色行提示；两者皆无 → 隐藏
         if ($Script:Agents.codex.installed -eq $true) { $Script:CodexInstalled = $true }
         elseif ($Script:Agents.codex.userDeclined -eq $true) { $Script:CodexDeclined = $true }
+    }
+    # P-B：OpenClaw / Pi / Node 同语义
+    if ($Script:Agents.PSObject.Properties['node'] -and $Script:Agents.node -and $Script:Agents.node.installed -eq $true) {
+        $Script:NodeInstalled = $true
+    }
+    if ($Script:Agents.PSObject.Properties['openclaw'] -and $Script:Agents.openclaw) {
+        if ($Script:Agents.openclaw.installed -eq $true) { $Script:OpenclawInstalled = $true }
+        elseif ($Script:Agents.openclaw.userDeclined -eq $true) { $Script:OpenclawDeclined = $true }
+    }
+    if ($Script:Agents.PSObject.Properties['pi'] -and $Script:Agents.pi) {
+        if ($Script:Agents.pi.installed -eq $true) { $Script:PiInstalled = $true }
+        elseif ($Script:Agents.pi.userDeclined -eq $true) { $Script:PiDeclined = $true }
     }
 }
 
@@ -466,6 +482,56 @@ function Start-CodexSession() {
     }
     Write-Step '启动 Codex CLI 会话（退出会话后返回本菜单）'
     & $codexExe
+    Write-Host ''
+    Write-Ok '会话已结束，按回车返回'
+    Read-Host | Out-Null
+}
+
+function Start-NodeAgentSession([string]$Name) {
+    # P-B §3.3-3.5：OpenClaw / Pi 共用便携 Node 直启（不经 npm run——exFAT 无 .bin 符号链接）
+    # $Name = 'openclaw' | 'pi'
+    $nodeExe = Join-Path $Script:UsbRoot 'bin\node\node.exe'
+    if (-not (Test-Path $nodeExe)) {
+        Write-Warn 'bin\node\node.exe 缺失（Node 运行时未安装或已损坏）。重跑制作命令可补装。'
+        Read-Host '按回车键返回' | Out-Null
+        return
+    }
+    if ($Name -eq 'openclaw') {
+        $entry = Join-Path $Script:UsbRoot 'bin\openclaw\node_modules\openclaw\openclaw.mjs'
+        $title = 'OpenClaw 个人 AI 助理'
+    } else {
+        $entry = Join-Path $Script:UsbRoot 'bin\pi\node_modules\@mariozechner\pi-coding-agent\dist\cli.js'
+        $title = 'Pi 编码 agent'
+    }
+    if (-not (Test-Path $entry)) {
+        Write-Warn "入口缺失（$entry）。重跑制作命令可补装。"
+        Read-Host '按回车键返回' | Out-Null
+        return
+    }
+    $token = $Script:Conf['AUTH_TOKEN']
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        Write-Warn '未获取到凭证（auth_token），无法启动。请先经「查询余额 / 管理账号」完成激活。'
+        Read-Host '按回车键返回' | Out-Null
+        return
+    }
+    $binDir = Join-Path $Script:UsbRoot 'bin'
+    # 环境注入：与 Claude 相同的两个网关变量（Anthropic 协议）；状态目录/npm 缓存重定向到 U盘（零残留 §3.3）
+    $env:ANTHROPIC_BASE_URL = 'https://tokeneff.com'
+    $env:ANTHROPIC_AUTH_TOKEN = $token   # 与 Claude 会话同源同款（仅 AUTH_TOKEN，避免个别 SDK 优先 API_KEY 走偏计费路径）
+    $env:npm_config_cache = Join-Path $Script:ConfigDir 'npm-cache'
+    $stateDir = Join-Path $Script:ConfigDir $Name
+    New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+    if ($Name -eq 'openclaw') { $env:OPENCLAW_STATE_DIR = $stateDir; $env:OPENCLAW_CONFIG_DIR = $stateDir }
+    else { $env:PI_CONFIG_DIR = $stateDir; $env:PI_HOME = $stateDir }
+    # PATH 前置 bin\node 与便携 Git（与 Claude/Codex 会话共用）
+    $pg = Join-Path $binDir 'portablegit'
+    if (Test-Path (Join-Path $pg 'bin\bash.exe')) {
+        $env:PATH = "$pg\cmd;$pg\bin;$binDir\node;$binDir;$env:PATH"
+    } else {
+        $env:PATH = "$binDir\node;$binDir;$env:PATH"
+    }
+    Write-Step "启动 $title 会话（退出会话后返回本菜单）"
+    & $nodeExe $entry
     Write-Host ''
     Write-Ok '会话已结束，按回车返回'
     Read-Host | Out-Null
@@ -635,6 +701,16 @@ while ($true) {
         } elseif ($Script:CodexDeclined) {
             Write-Host "  [4] Codex CLI（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
         }
+        if ($Script:OpenclawInstalled) {
+            Write-Host "  [5] OpenClaw（个人 AI 助理）$(if (-not $Script:NodeInstalled) { '（Node 运行时缺失，重跑制作命令可补装）' })"
+        } elseif ($Script:OpenclawDeclined) {
+            Write-Host "  [5] OpenClaw（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
+        }
+        if ($Script:PiInstalled) {
+            Write-Host "  [6] Pi（轻量编码 agent）$(if (-not $Script:NodeInstalled) { '（Node 运行时缺失，重跑制作命令可补装）' })"
+        } elseif ($Script:PiDeclined) {
+            Write-Host "  [6] Pi（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
+        }
         Write-Host "  [0] 退出（清理本机临时文件）"
         $choice = (Read-Host '请输入编号').Trim()
     }
@@ -713,7 +789,17 @@ while ($true) {
             elseif ($Script:CodexDeclined) { Write-Warn '此盘未安装 Codex CLI（制作时未勾选）。重跑制作命令可补装。' }
             else { Write-Warn '输入无效。' }
         }
+        '5' {
+            if ($Script:OpenclawInstalled) { Start-NodeAgentSession -Name 'openclaw' }
+            elseif ($Script:OpenclawDeclined) { Write-Warn '此盘未安装 OpenClaw（制作时未勾选）。重跑制作命令可补装。' }
+            else { Write-Warn '输入无效。' }
+        }
+        '6' {
+            if ($Script:PiInstalled) { Start-NodeAgentSession -Name 'pi' }
+            elseif ($Script:PiDeclined) { Write-Warn '此盘未安装 Pi（制作时未勾选）。重跑制作命令可补装。' }
+            else { Write-Warn '输入无效。' }
+        }
         '0' { Invoke-ExitCleanup }
-        default { Write-Warn '输入无效，请输入 0-4 的编号。' }
+        default { Write-Warn '输入无效，请输入 0-6 的编号。' }
     }
 }

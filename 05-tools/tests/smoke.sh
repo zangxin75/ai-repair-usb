@@ -210,6 +210,47 @@ grep -q '安装 Debian 12' "$MAKER/usb-v1.0.ps1" || { S67=0; bad "usb-v1.0.ps1 v
 grep -q '安装 Debian 12' "$MAKER/usb-v1.0.sh" || { S67=0; bad "usb-v1.0.sh ventoy 别名缺 Debian 分支"; }
 [[ $S67 -eq 1 ]] && ok "ventoy.json 含「安装 Debian 12」条件别名分支"
 
+# ───────────────────────── 第 7 节：P-B 产物断言（多Agent工作站 P-B：OpenClaw/Pi/Node） ─────────────────────────
+
+# 检查 7-1：manifest 1.0.5 含 node/openclaw/pi 组件（url + sha256 非空，供应链钉值）
+S71=1
+for comp in node openclaw pi; do
+  python3 - "$MAKER/manifest.json" "$comp" <<'PYCHK' || { S71=0; bad "manifest.json 组件 $comp 缺失或未钉 sha256"; }
+import json, sys
+m = json.load(open(sys.argv[1], encoding='utf-8'))
+for c in m['components']:
+    if c['name'] == sys.argv[2] and c.get('url') and len(c.get('sha256','')) == 64:
+        sys.exit(0)
+sys.exit(1)
+PYCHK
+done
+grep -q '"version": "1.0.5"' "$MAKER/manifest.json" || { S71=0; bad "manifest 版本应为 1.0.5"; }
+[[ $S71 -eq 1 ]] && ok "manifest 1.0.5：node/openclaw/pi 组件已钉 url+sha256"
+
+# 检查 7-2：两制作器含 OpenClaw/Pi 勾选 + Node 运行时处理 + 预装包下载段
+S72=1
+for f in usb-v1.0.ps1 usb-v1.0.sh; do
+  grep -q 'OpenClaw' "$MAKER/$f" || { S72=0; bad "$f 缺 OpenClaw 勾选"; }
+  grep -q 'pi-coding-agent' "$MAKER/$f" || { S72=0; bad "$f 缺 Pi 入口"; }
+  grep -q 'bin\\node\\node.exe\|bin/node/node.exe' "$MAKER/$f" || { S72=0; bad "$f 缺 Node 运行时落盘"; }
+done
+grep -q -- '--agents claude,codex,openclaw,pi,node,linux' "$MAKER/usb-v1.0.sh" || { S72=0; bad "usb-v1.0.sh --agents 用法未列 openclaw/pi/node"; }
+[[ $S72 -eq 1 ]] && ok "两制作器：OpenClaw/Pi 勾选 + Node 运行时 + --agents 扩展"
+
+# 检查 7-3：启动器 0.4.0 含 OpenClaw/Pi 入口（agents.json 驱动显隐 + node 直启）
+S73=1
+grep -q "ScriptVersion   = '0.4.0'" "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器版本应为 0.4.0"; }
+grep -q 'Start-NodeAgentSession' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器缺 Start-NodeAgentSession"; }
+grep -q 'openclaw.mjs' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器缺 OpenClaw 入口路径"; }
+grep -q 'OPENCLAW_STATE_DIR' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器缺 OpenClaw 状态目录重定向"; }
+grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器缺 npm 缓存重定向（零残留）"; }
+grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
+[[ $S73 -eq 1 ]] && ok "启动器 0.4.0：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
+
+# 检查 7-4：制作器版本 1.3.0
+grep -q "ScriptVersion   = '1.3.0'" "$MAKER/usb-v1.0.ps1" && grep -q 'SCRIPT_VERSION="1.3.0"' "$MAKER/usb-v1.0.sh" \
+  && ok "两制作器版本 1.3.0（P-B）" || bad "制作器版本号未升至 1.3.0"
+
 echo
 echo "=== 结果：通过 $PASS 项 / 失败 $FAIL 项 ==="
 [[ $FAIL -eq 0 ]] || exit 1

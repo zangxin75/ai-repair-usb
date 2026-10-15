@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.2.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.3.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.2.0
+# 版本: 1.3.0
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
 #
@@ -15,13 +15,14 @@
 #   curl -sL https://usb.tokeneff.com/maker/usb-v1.0.sh | sudo bash
 # 审阅后再执行（推荐）:
 #   curl -sLO https://usb.tokeneff.com/maker/usb-v1.0.sh && less usb-v1.0.sh && sudo bash usb-v1.0.sh
-#   可选（P-A A4）: sudo bash usb-v1.0.sh --agents claude,codex,linux   # 跳过逐项问答，逗号分隔；
-#   claude=便携 Claude Code / codex=Codex CLI / linux=Debian 12 netinst；未列项视为不装
+#   可选（P-A A4）: sudo bash usb-v1.0.sh --agents claude,codex,openclaw,pi,node,linux   # 跳过逐项问答，逗号分隔；
+#   claude=便携 Claude Code / codex=Codex CLI / openclaw=OpenClaw / pi=Pi 编码 agent /
+#   node=便携 Node（勾 openclaw/pi 时建议附带）/ linux=Debian 12 netinst；未列项视为不装
 # =====================================================================
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.3.0"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -187,7 +188,7 @@ for ((ai=1; ai<=$#; ai++)); do
     fi
 done
 case "$AGENTS_ARG" in *[^a-z,]*)
-    die "--agents 参数含非法字符（只接受逗号分隔的 claude/codex/linux）。" "" ;;
+    die "--agents 参数含非法字符（只接受逗号分隔的 claude/codex/openclaw/pi/node/linux）。" "" ;;
 esac
 
 # ---------------- 5. 毁盘警告 + YES 确认 ----------------
@@ -208,23 +209,60 @@ CODEX_SHA="$(json_get codex sha256)"
 CODEX_AVAILABLE=0; [ -n "$CODEX_URL" ] && CODEX_AVAILABLE=1
 [ "$CODEX_AVAILABLE" = "1" ] || c_warn "Codex CLI 暂不可用（发布清单未提供），本次制作已跳过，不影响其他组件。"
 
+# P-B：OpenClaw / Pi / 便携 Node 可用性同样由 manifest 驱动（Node 仅作 [3]/[4] 的运行时，不单列勾选项）
+OC_URL="$(json_get openclaw url)";   OC_FNAME="$(json_get openclaw filename)";   OC_SHA="$(json_get openclaw sha256)";   OC_VER="$(json_get openclaw version)"
+PI_URL="$(json_get pi url)";         PI_FNAME="$(json_get pi filename)";         PI_SHA="$(json_get pi sha256)";         PI_VER="$(json_get pi version)"
+NODE_URL="$(json_get node url)";     NODE_FNAME="$(json_get node filename)";     NODE_SHA="$(json_get node sha256)";     NODE_VER="$(json_get node version)"
+OC_AVAILABLE=0;   [ -n "$OC_URL" ]   && OC_AVAILABLE=1
+PI_AVAILABLE=0;   [ -n "$PI_URL" ]   && PI_AVAILABLE=1
+NODE_AVAILABLE=0; [ -n "$NODE_URL" ] && NODE_AVAILABLE=1
+[ "$OC_AVAILABLE" = "1" ]   || c_warn "OpenClaw 暂不可用（发布清单未提供），已跳过。"
+[ "$PI_AVAILABLE" = "1" ]   || c_warn "Pi 暂不可用（发布清单未提供），已跳过。"
+if [ "$((OC_AVAILABLE + PI_AVAILABLE))" -gt 0 ] && [ "$NODE_AVAILABLE" = "0" ]; then
+    c_warn "便携 Node 运行时未提供，OpenClaw/Pi 将无法运行（如需使用请等待发布更新）。"
+fi
+
 DEBIAN_NAME="debian-12.8.0-amd64-netinst.iso"
 DEBIAN_URL="https://cdimage.debian.org/cdimage/archive/12.8.0/amd64/iso-cd/debian-12.8.0-amd64-netinst.iso"
 DEBIAN_SHA="04396d12b0f377958a070c38a923c227832fa3b3e18ddc013936ecf492e9fbb3"
 DEBIAN_GB=1     # ~650MB，取整 1GB 余量
 CODEX_GB=1      # ~334MB，取整 1GB 余量
+OC_GB=1         # ~154MB 下载 / ~380MB 落盘，取整 1GB 余量
+PI_GB=1         # ~33MB 下载 / ~90MB 落盘，取整 1GB 余量
+NODE_GB=1       # ~36MB zip / ~110MB 落盘，取整 1GB 余量
 
 if [ -n "$AGENTS_ARG" ]; then
-    # --agents 参数优先：逗号分隔，未列项视为不装；codex 不可用时忽略该项并提示
-    WANT_CLAUDE=0; WANT_CODEX=0; WANT_DEBIAN=0
-    case ",$AGENTS_ARG," in *",claude,"*) WANT_CLAUDE=1 ;; esac
-    case ",$AGENTS_ARG," in *",codex,"*)  WANT_CODEX=1 ;; esac
-    case ",$AGENTS_ARG," in *",linux,"*)  WANT_DEBIAN=1 ;; esac
+    # --agents 参数优先：逗号分隔，未列项视为不装；不可用项忽略并提示
+    WANT_CLAUDE=0; WANT_CODEX=0; WANT_OPENCLAW=0; WANT_PI=0; WANT_NODE=0; WANT_DEBIAN=0
+    case ",$AGENTS_ARG," in *",claude,"*)   WANT_CLAUDE=1 ;; esac
+    case ",$AGENTS_ARG," in *",codex,"*)    WANT_CODEX=1 ;; esac
+    case ",$AGENTS_ARG," in *",openclaw,"*) WANT_OPENCLAW=1 ;; esac
+    case ",$AGENTS_ARG," in *",pi,"*)       WANT_PI=1 ;; esac
+    case ",$AGENTS_ARG," in *",node,"*)     WANT_NODE=1 ;; esac
+    case ",$AGENTS_ARG," in *",linux,"*)    WANT_DEBIAN=1 ;; esac
     if [ "$WANT_CODEX" = "1" ] && [ "$CODEX_AVAILABLE" = "0" ]; then
         c_warn "--agents 含 codex 但当前不可用，已忽略该项。"
         WANT_CODEX=0
     fi
-    c_ok "已按 --agents 勾选: Claude=$( [ $WANT_CLAUDE = 1 ] && echo 装 || echo 不装 ) / Codex=$( [ $WANT_CODEX = 1 ] && echo 装 || echo 不装 ) / Debian=$( [ $WANT_DEBIAN = 1 ] && echo 装 || echo 不装 )"
+    if [ "$WANT_OPENCLAW" = "1" ] && [ "$OC_AVAILABLE" = "0" ]; then
+        c_warn "--agents 含 openclaw 但当前不可用，已忽略该项。"; WANT_OPENCLAW=0
+    fi
+    if [ "$WANT_PI" = "1" ] && [ "$PI_AVAILABLE" = "0" ]; then
+        c_warn "--agents 含 pi 但当前不可用，已忽略该项。"; WANT_PI=0
+    fi
+    # 与交互分支语义对齐：Node 运行时不可用时取消 OpenClaw/Pi（否则装了也起不来）
+    if [ "$NODE_AVAILABLE" = "0" ] && { [ "$WANT_OPENCLAW" = "1" ] || [ "$WANT_PI" = "1" ]; }; then
+        c_warn "便携 Node 运行时不可用，已取消 OpenClaw/Pi 勾选。"
+        WANT_OPENCLAW=0; WANT_PI=0
+    fi
+    if [ "$WANT_OPENCLAW" = "1" ] || [ "$WANT_PI" = "1" ]; then
+        # Node 运行时：勾了 openclaw/pi 但未显式勾 node → 自动附带（--agents 承诺全自动化，不再交互提问）
+        if [ "$WANT_NODE" = "0" ] && [ "$NODE_AVAILABLE" = "1" ]; then
+            WANT_NODE=1
+            c_warn "已自动附带便携 Node 运行时（OpenClaw/Pi 依赖；--agents 未显式给出 node）。"
+        fi
+    fi
+    c_ok "已按 --agents 勾选: Claude=$( [ $WANT_CLAUDE = 1 ] && echo 装 || echo 不装 ) / Codex=$( [ $WANT_CODEX = 1 ] && echo 装 || echo 不装 ) / OpenClaw=$( [ $WANT_OPENCLAW = 1 ] && echo 装 || echo 不装 ) / Pi=$( [ $WANT_PI = 1 ] && echo 装 || echo 不装 ) / Node=$( [ $WANT_NODE = 1 ] && echo 装 || echo 不装 ) / Debian=$( [ $WANT_DEBIAN = 1 ] && echo 装 || echo 不装 )"
 else
     # 缺省逐项 y/n 问答；回车默认（claude 默认装，其余默认不装）
     read -rp "安装便携 Claude Code（维修/办公 AI 引擎，约 236MB）？(Y/n): " R1
@@ -234,6 +272,24 @@ else
         read -rp "安装 Codex CLI（OpenAI 风格命令行助手，约 334MB）？(y/N): " R2
         [ "${R2,,}" = "y" ] && WANT_CODEX=1
     fi
+    WANT_OPENCLAW=0; WANT_PI=0; WANT_NODE=0
+    if [ "$OC_AVAILABLE" = "1" ]; then
+        read -rp "安装 OpenClaw（个人 AI 助理，约 380MB，需 Node 运行时）？(y/N): " R4
+        [ "${R4,,}" = "y" ] && WANT_OPENCLAW=1
+    fi
+    if [ "$PI_AVAILABLE" = "1" ]; then
+        read -rp "安装 Pi（轻量编码 agent，约 90MB，需 Node 运行时）？(y/N): " R5
+        [ "${R5,,}" = "y" ] && WANT_PI=1
+    fi
+    if [ "$WANT_OPENCLAW" = "1" ] || [ "$WANT_PI" = "1" ]; then
+        if [ "$NODE_AVAILABLE" = "1" ]; then
+            read -rp "OpenClaw/Pi 需要 Node 运行时（约 110MB），一并安装？(Y/n): " RN
+            case "${RN,,}" in n*) WANT_NODE=0 ;; *) WANT_NODE=1 ;; esac
+        else
+            c_warn "便携 Node 运行时不可用，OpenClaw/Pi 已取消勾选。"
+            WANT_OPENCLAW=0; WANT_PI=0
+        fi
+    fi
     read -rp "附带 Debian 12 netinst 安装镜像（约 650MB）？(y/N): " R3
     [ "${R3,,}" = "y" ] && WANT_DEBIAN=1 || WANT_DEBIAN=0
 fi
@@ -241,11 +297,16 @@ fi
 # —— 容量动态复查（第二段）：MinBaseGB + Σ勾选项；不足时给出建议取消项（优先 Debian → codex）——
 NEED_GB=$((MIN_BASE_GB))
 [ "$WANT_CODEX" = "1" ] && NEED_GB=$((NEED_GB + CODEX_GB))
+[ "$WANT_OPENCLAW" = "1" ] && NEED_GB=$((NEED_GB + OC_GB))
+[ "$WANT_PI" = "1" ] && NEED_GB=$((NEED_GB + PI_GB))
+[ "$WANT_NODE" = "1" ] && NEED_GB=$((NEED_GB + NODE_GB))
 [ "$WANT_DEBIAN" = "1" ] && NEED_GB=$((NEED_GB + DEBIAN_GB))
 # Windows 镜像需手动拷入（Linux 端不下载），此处不叠加 WinISO 体积
 if [ "$NEED_GB" -gt "$SIZE_GB" ]; then
     c_warn "勾选后预计需要约 ${NEED_GB}GB，所选 U盘（约 ${SIZE_GB}GB）可能不足。建议取消（按优先级）："
     [ "$WANT_DEBIAN" = "1" ] && echo "    - 取消 Debian 12 镜像（省约 1GB）"
+    [ "$WANT_OPENCLAW" = "1" ] && echo "    - 取消 OpenClaw（省约 1GB）"
+    [ "$WANT_PI" = "1" ] && echo "    - 取消 Pi（省约 1GB）"
     [ "$WANT_CODEX" = "1" ] && echo "    - 取消 Codex CLI（省约 1GB）"
     read -rp "输入 C 继续（空间不足风险自负）/ 其他任意键退出: " RC
     [ "${RC^^}" = "C" ] || { echo "已取消，未对 U盘 做任何修改。"; exit 0; }
@@ -371,6 +432,39 @@ if [ "$WANT_DEBIAN" = "1" ]; then
         c_ok "Debian 12 netinst 就绪（官方 SHA256SUMS 钉值校验通过）"
     else
         c_warn "Debian 12 镜像下载/校验失败。不阻断制作——盘上将无 Linux 安装镜像。"
+    fi
+fi
+
+# ---------------- 6.8 OpenClaw / Pi / 便携 Node（P-B：勾选了才走；失败降级 installed=false） ----------------
+NODE_TAR=""; OC_TAR=""; PI_TAR=""
+if [ "$WANT_NODE" = "1" ] && [ "$NODE_AVAILABLE" = "1" ]; then
+    echo "    便携 Node ${NODE_VER}（${NODE_FNAME}，约 36MB zip）..."
+    if fetch_retry "$NODE_URL" "${WORKDIR}/${NODE_FNAME}" \
+        && sha_check "${WORKDIR}/${NODE_FNAME}" "$NODE_SHA" "$NODE_FNAME"; then
+        NODE_TAR="${WORKDIR}/${NODE_FNAME}"
+        c_ok "便携 Node 运行时就绪（官方 SHASUMS 钉值校验通过）"
+    else
+        c_warn "便携 Node 下载/校验失败。OpenClaw/Pi 将无法运行，不阻断制作。"
+    fi
+fi
+if [ "$WANT_OPENCLAW" = "1" ] && [ "$OC_AVAILABLE" = "1" ]; then
+    echo "    OpenClaw ${OC_VER} 预装包（${OC_FNAME}，约 154MB tar.gz）..."
+    if fetch_retry "$OC_URL" "${WORKDIR}/${OC_FNAME}" \
+        && sha_check "${WORKDIR}/${OC_FNAME}" "$OC_SHA" "$OC_FNAME"; then
+        OC_TAR="${WORKDIR}/${OC_FNAME}"
+        c_ok "OpenClaw 预装包就绪（发布侧 sha256 校验通过）"
+    else
+        c_warn "OpenClaw 下载/校验失败。不阻断制作——启动器不显示其入口。"
+    fi
+fi
+if [ "$WANT_PI" = "1" ] && [ "$PI_AVAILABLE" = "1" ]; then
+    echo "    Pi ${PI_VER} 预装包（${PI_FNAME}，约 33MB tar.gz）..."
+    if fetch_retry "$PI_URL" "${WORKDIR}/${PI_FNAME}" \
+        && sha_check "${WORKDIR}/${PI_FNAME}" "$PI_SHA" "$PI_FNAME"; then
+        PI_TAR="${WORKDIR}/${PI_FNAME}"
+        c_ok "Pi 预装包就绪（发布侧 sha256 校验通过）"
+    else
+        c_warn "Pi 下载/校验失败。不阻断制作——启动器不显示其入口。"
     fi
 fi
 
@@ -593,6 +687,50 @@ TOML
     c_ok "已放入: bin/codex.exe + config/codex/config.toml"
 fi
 
+# Node / OpenClaw / Pi 落盘（P-B §3.3-3.5：bin/node/ + bin/openclaw/ + bin/pi/）
+NODE_INSTALLED=0; OC_INSTALLED=0; PI_INSTALLED=0
+if [ -n "$NODE_TAR" ]; then
+    rm -rf "$MNT/bin/node" "${WORKDIR}/node-extract"
+    mkdir -p "${WORKDIR}/node-extract"
+    echo "    解压便携 Node ..."
+    if unzip -qo "$NODE_TAR" -d "${WORKDIR}/node-extract" \
+        && INNER="$(find "${WORKDIR}/node-extract" -maxdepth 1 -mindepth 1 -type d | head -n1)" \
+        && [ -f "$INNER/node.exe" ]; then
+        # 注意用 -f 不用 -x：zip 内 node.exe 无执行位（external_attr=0），Linux 解出 0664；
+        # 该 exe 是 Windows 载荷，Linux 侧只做存在性判断
+        mv "$INNER" "$MNT/bin/node"
+        NODE_INSTALLED=1
+        c_ok "已解压: bin/node/（便携 Node 运行时）"
+    else
+        c_warn "便携 Node 解压失败。OpenClaw/Pi 将无法运行，不阻断制作。"
+    fi
+fi
+if [ -n "$OC_TAR" ]; then
+    rm -rf "$MNT/bin/openclaw"; mkdir -p "$MNT/bin/openclaw"
+    echo "    解包 OpenClaw 预装包 ..."
+    # tar 内为 node_modules/ 顶层；预装包已 --dereference 烤平符号链接（exFAT 兼容）
+    if tar -xzf "$OC_TAR" -C "$MNT/bin/openclaw" \
+        && [ -f "$MNT/bin/openclaw/node_modules/openclaw/openclaw.mjs" ]; then
+        OC_INSTALLED=1
+        c_ok "已解包: bin/openclaw/（入口 node_modules/openclaw/openclaw.mjs）"
+    else
+        rm -rf "$MNT/bin/openclaw"
+        c_warn "OpenClaw 解包失败。不阻断制作——启动器不显示其入口。"
+    fi
+fi
+if [ -n "$PI_TAR" ]; then
+    rm -rf "$MNT/bin/pi"; mkdir -p "$MNT/bin/pi"
+    echo "    解包 Pi 预装包 ..."
+    if tar -xzf "$PI_TAR" -C "$MNT/bin/pi" \
+        && [ -f "$MNT/bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ]; then
+        PI_INSTALLED=1
+        c_ok "已解包: bin/pi/（入口 node_modules/@mariozechner/pi-coding-agent/dist/cli.js）"
+    else
+        rm -rf "$MNT/bin/pi"
+        c_warn "Pi 解包失败。不阻断制作——启动器不显示其入口。"
+    fi
+fi
+
 # 场景③便携运行时 → U盘 bin\（claude.exe 直跑 + MinGit 提供 bash）
 if [ -n "$CLAUDE_EXE" ]; then
     mkdir -p "$MNT/bin"
@@ -623,21 +761,40 @@ fi
 CLAUDE_INSTALLED=0; [ -n "$CLAUDE_EXE" ] && CLAUDE_INSTALLED=1
 CLAUDE_DECLINED=0; [ "$WANT_CLAUDE" = "1" ] || CLAUDE_DECLINED=1
 CODEX_DECLINED=0; [ "$WANT_CODEX" = "1" ] || CODEX_DECLINED=1
+# P-B：OpenClaw/Pi/Node 勾选语义同上（node 非「引擎」，但启动器据此决定是否 PATH 前置 bin/node）
+OC_DECLINED=0;   [ "$WANT_OPENCLAW" = "1" ] || OC_DECLINED=1
+PI_DECLINED=0;   [ "$WANT_PI" = "1" ] || PI_DECLINED=1
+NODE_DECLINED=0; [ "$WANT_NODE" = "1" ] || NODE_DECLINED=1
 if command -v jq >/dev/null 2>&1; then
     jq -n \
         --argjson ci "$CLAUDE_INSTALLED" --argjson cd "$CLAUDE_DECLINED" \
         --argjson xi "$CODEX_INSTALLED" --argjson xd "$CODEX_DECLINED" \
         --argjson xavail "$CODEX_AVAILABLE" \
-        '{claude:{installed:$ci,userDeclined:$cd}} + (if $xavail==1 then {codex:{installed:$xi,userDeclined:$xd}} else {} end)' \
+        --argjson oi "$OC_INSTALLED" --argjson od "$OC_DECLINED" --argjson oavail "$OC_AVAILABLE" --arg over "$OC_VER" \
+        --argjson pi2 "$PI_INSTALLED" --argjson pd "$PI_DECLINED" --argjson pavail "$PI_AVAILABLE" --arg pver "$PI_VER" \
+        --argjson ni "$NODE_INSTALLED" --argjson nd "$NODE_DECLINED" --argjson navail "$NODE_AVAILABLE" --arg nver "$NODE_VER" \
+        '{claude:{installed:$ci,userDeclined:$cd}} + (if $xavail==1 then {codex:{installed:$xi,userDeclined:$xd}} else {} end) + (if $oavail==1 then {openclaw:{installed:$oi,userDeclined:$od,version:$over}} else {} end) + (if $pavail==1 then {pi:{installed:$pi2,userDeclined:$pd,version:$pver}} else {} end) + (if $navail==1 then {node:{installed:$ni,userDeclined:$nd,version:$nver}} else {} end)' \
         > "$MNT/config/agents.json"
 else
     python3 - "$CLAUDE_INSTALLED" "$CLAUDE_DECLINED" "$CODEX_INSTALLED" "$CODEX_DECLINED" "$CODEX_AVAILABLE" \
+        "$OC_INSTALLED" "$OC_DECLINED" "$OC_AVAILABLE" "$OC_VER" \
+        "$PI_INSTALLED" "$PI_DECLINED" "$PI_AVAILABLE" "$PI_VER" \
+        "$NODE_INSTALLED" "$NODE_DECLINED" "$NODE_AVAILABLE" "$NODE_VER" \
         > "$MNT/config/agents.json" <<'PYJS'
 import json, sys
-ci, cd, xi, xd, xa = map(int, sys.argv[1:])
+ci, cd, xi, xd, xa = map(int, sys.argv[1:6])
+oi, od, oa, ov = int(sys.argv[6]), int(sys.argv[7]), int(sys.argv[8]), sys.argv[9]
+pi_i, pd, pa, pv = int(sys.argv[10]), int(sys.argv[11]), int(sys.argv[12]), sys.argv[13]
+ni, nd, na, nv = int(sys.argv[14]), int(sys.argv[15]), int(sys.argv[16]), sys.argv[17]
 d = {"claude": {"installed": bool(ci), "userDeclined": bool(cd)}}
 if xa:
     d["codex"] = {"installed": bool(xi), "userDeclined": bool(xd)}
+if oa:
+    d["openclaw"] = {"installed": bool(oi), "userDeclined": bool(od), "version": ov}
+if pa:
+    d["pi"] = {"installed": bool(pi_i), "userDeclined": bool(pd), "version": pv}
+if na:
+    d["node"] = {"installed": bool(ni), "userDeclined": bool(nd), "version": nv}
 print(json.dumps(d, indent=2))
 PYJS
 fi
@@ -668,6 +825,16 @@ fi
 # Debian 盘上复核（勾选且已拷入才校验）
 if [ -n "$DEBIAN_ISO" ]; then
     sha_check "$MNT/ISO/$DEBIAN_NAME" "$DEBIAN_SHA" "$DEBIAN_NAME"
+fi
+# Node / OpenClaw / Pi 盘上复核（P-B：勾选且已落盘才校验；解压产物整树无 sha，校验关键入口存在性）
+if [ "$NODE_INSTALLED" = "1" ]; then
+    [ -f "$MNT/bin/node/node.exe" ] || die "bin/node/node.exe 缺失。" "请重新运行制作器。"
+fi
+if [ "$OC_INSTALLED" = "1" ]; then
+    [ -f "$MNT/bin/openclaw/node_modules/openclaw/openclaw.mjs" ] || die "bin/openclaw 入口缺失。" "请重新运行制作器。"
+fi
+if [ "$PI_INSTALLED" = "1" ]; then
+    [ -f "$MNT/bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ] || die "bin/pi 入口缺失。" "请重新运行制作器。"
 fi
 umount "$MNT"
 

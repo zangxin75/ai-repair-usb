@@ -1,7 +1,7 @@
-# usb-v1.0.ps1 版本: 1.2.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.2.0
+# 版本: 1.3.0（P-B：+OpenClaw/Pi/便携 Node 勾选，多Agent工作站 P-B）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
 # 兼容: PowerShell 5.1+（Win10/Win11 自带，不依赖第三方工具）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5
@@ -22,7 +22,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.2.0'
+$Script:ScriptVersion   = '1.3.0'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -419,6 +419,22 @@ $codexComponent = $null
 foreach ($c in $manifest.components) { if ($c.name -eq 'codex' -and -not [string]::IsNullOrWhiteSpace($c.url)) { $codexComponent = $c; break } }
 if (-not $codexComponent) { Write-Warn 'Codex CLI 暂不可用（发布清单未提供），本次制作已跳过，不影响其他组件。' }
 
+# P-B：OpenClaw / Pi / 便携 Node 同样由 manifest 驱动显隐（§4.0；Node 仅作 [3]/[4] 的运行时，不单列勾选项）
+$openclawComponent = $null; $piComponent = $null; $nodeComponent = $null
+foreach ($c in $manifest.components) {
+    if ([string]::IsNullOrWhiteSpace($c.url)) { continue }
+    switch ($c.name) {
+        'openclaw' { $openclawComponent = $c }
+        'pi'       { $piComponent = $c }
+        'node'     { $nodeComponent = $c }
+    }
+}
+if (-not $openclawComponent) { Write-Warn 'OpenClaw 暂不可用（发布清单未提供），已跳过。' }
+if (-not $piComponent)       { Write-Warn 'Pi 暂不可用（发布清单未提供），已跳过。' }
+if (($openclawComponent -or $piComponent) -and -not $nodeComponent) {
+    Write-Warn '便携 Node 运行时未提供，OpenClaw/Pi 将无法运行（如需使用请等待发布更新）。'
+}
+
 $DebianName   = 'debian-12.8.0-amd64-netinst.iso'
 $DebianUrl    = 'https://cdimage.debian.org/cdimage/archive/12.8.0/amd64/iso-cd/debian-12.8.0-amd64-netinst.iso'   # 官方存档直链（点版本永久保留）
 $DebianSha256 = '04396d12b0f377958a070c38a923c227832fa3b3e18ddc013936ecf492e9fbb3'                                     # 官方 SHA256SUMS 钉值
@@ -428,6 +444,10 @@ $DebianGB     = [math]::Round(0.65, 2)   # ~650MB
 $winIsoEstGB = 5.6
 $codexEstGB  = [math]::Round($codexComponent.sizeBytes / 1GB, 2)
 if ($codexEstGB -le 0) { $codexEstGB = 0.34 }   # 兜底估算（官方 codex.exe ~334MB）
+# P-B：OpenClaw/Pi/Node 估算（manifest 尺寸为下载压缩体积，落盘后约 ×2.3；容量预算按解压后估算，另见 §4.0-0）
+$openclawEstGB = [math]::Round(($openclawComponent.sizeBytes / 1GB) * 2.3, 2); if ($openclawEstGB -le 0) { $openclawEstGB = 0.38 }
+$piEstGB       = [math]::Round(($piComponent.sizeBytes / 1GB) * 2.3, 2);       if ($piEstGB -le 0)       { $piEstGB = 0.09 }
+$nodeEstGB     = [math]::Round(($nodeComponent.sizeBytes / 1GB) * 2.9, 2);      if ($nodeEstGB -le 0)     { $nodeEstGB = 0.11 }   # zip 解压率更高
 
 $agentSel = $null
 while ($true) {
@@ -435,11 +455,14 @@ while ($true) {
     Write-Step 'AI 引擎与扩展镜像勾选（可多选，编号用空格/逗号分隔；直接回车 = 1）'
     Write-Host '  [1] Claude Code（维修/办公 AI 引擎，推荐）'
     if ($codexComponent) { Write-Host "  [2] Codex CLI（OpenAI 风格命令行助手，约 ${codexEstGB}GB）" }
+    if ($openclawComponent) { Write-Host "  [3] OpenClaw（个人 AI 助理，约 ${openclawEstGB}GB，需 Node 运行时）" }
+    if ($piComponent)       { Write-Host "  [4] Pi（轻量编码 agent，约 ${piEstGB}GB，需 Node 运行时）" }
     Write-Host "  [5] Linux 安装镜像 Debian 12 netinst（约 ${DebianGB}GB，装 Linux 用）"
     $raw = Read-Host '请输入编号'
     if ([string]::IsNullOrWhiteSpace($raw)) { $raw = '1' }
-    # 中文逗号/空格分隔 → 去重；只接受当前可选项（1 / 2(仅可用时) / 5）
+    # 中文逗号/空格分隔 → 去重；只接受当前可选项（1 / 2/3/4(仅可用时) / 5）
     $valid = @('1','5'); if ($codexComponent) { $valid += '2' }
+    if ($openclawComponent) { $valid += '3' }; if ($piComponent) { $valid += '4' }
     $picks = @($raw -split '[，, ]+' | Where-Object { $_ } | Select-Object -Unique)
     $bad = @($picks | Where-Object { $_ -notin $valid })
     if ($bad.Count -gt 0) {
@@ -447,33 +470,51 @@ while ($true) {
         continue
     }
     $agentSel = $picks
-    $wantClaude = ($agentSel -contains '1')
-    $wantCodex  = ($agentSel -contains '2')
-    $wantDebian = ($agentSel -contains '5')
+    $wantClaude   = ($agentSel -contains '1')
+    $wantCodex    = ($agentSel -contains '2')
+    $wantOpenclaw = ($agentSel -contains '3')
+    $wantPi       = ($agentSel -contains '4')
+    $wantDebian   = ($agentSel -contains '5')
+
+    # P-B §4.0-0：Node 运行时 —— 仅当勾选了 [3]/[4] 才提示安装（默认装；不装则两者无法运行）
+    $wantNode = $false
+    if (($wantOpenclaw -or $wantPi) -and $nodeComponent) {
+        $ny = (Read-Host "检测到 OpenClaw/Pi 需要 Node 运行时（约 ${nodeEstGB}GB），是否一并安装？[Y/n]").Trim().ToLower()
+        if ([string]::IsNullOrWhiteSpace($ny) -or $ny -eq 'y') { $wantNode = $true }
+        else {
+            Write-Warn '未安装 Node 运行时，OpenClaw/Pi 无法运行——已取消 OpenClaw/Pi 勾选（重跑制作命令可一并补装）。'
+            $wantOpenclaw = $false; $wantPi = $false
+        }
+    }
 
     # —— 容量动态复查（P-A A4 第二段）：MinBaseGB + WinISO + Σ勾选项 ——
     $needGB = [double]$Script:MinBaseGB
     if ($wantWin10) { $needGB += $winIsoEstGB }
     if ($wantWin11) { $needGB += $winIsoEstGB }
-    if ($wantCodex)  { $needGB += $codexEstGB }
-    if ($wantDebian) { $needGB += $DebianGB }
+    if ($wantCodex)    { $needGB += $codexEstGB }
+    if ($wantOpenclaw) { $needGB += $openclawEstGB }
+    if ($wantPi)       { $needGB += $piEstGB }
+    if ($wantNode)     { $needGB += $nodeEstGB }
+    if ($wantDebian)   { $needGB += $DebianGB }
     $needGB = [math]::Round($needGB, 1)
     if ($needGB -le $sizeGB) { break }
 
-    # 不足 → 打印「建议取消项」（优先 Debian → Win ISO → codex），允许 继续/重选/退出
+    # 不足 → 打印「建议取消项」（优先 Debian → Win ISO → codex → openclaw/pi/node），允许 继续/重选/退出
     Write-Warn "勾选后预计需要约 ${needGB}GB，所选 U盘（${sizeGB} GB）可能不足。建议取消（按优先级）："
     $tips = @()
     if ($wantDebian) { $tips += "取消 [5] Debian 12（省 ${DebianGB}GB）" }
     if ($wantWin10 -and $wantWin11) { $tips += "Windows 镜像只保留一个（省约 ${winIsoEstGB}GB）" }
     elseif ($wantWin10 -or $wantWin11) { $tips += "取消 Windows 镜像（省约 ${winIsoEstGB}GB）" }
-    if ($wantCodex) { $tips += "取消 [2] Codex CLI（省 ${codexEstGB}GB）" }
+    if ($wantCodex)    { $tips += "取消 [2] Codex CLI（省 ${codexEstGB}GB）" }
+    if ($wantOpenclaw) { $tips += "取消 [3] OpenClaw（省 ${openclawEstGB}GB）" }
+    if ($wantPi)       { $tips += "取消 [4] Pi（省 ${piEstGB}GB）" }
     $tips | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
     $rc = (Read-Host '输入 C 继续（空间不足风险自负）/ R 重新勾选 / 其他任意键退出').Trim().ToUpper()
     if ($rc -eq 'C') { break }
     if ($rc -ne 'R') { Write-Host '已取消，未对 U盘 做任何修改。'; exit 0 }
     # R → 回到勾选循环
 }
-Write-Ok "勾选结果: Claude Code = $(if($wantClaude){'装'}else{'不装'}) / Codex = $(if($wantCodex){'装'}else{'不装'})$(if($codexComponent){''}else{'（不可用）'}) / Debian 12 = $(if($wantDebian){'装'}else{'不装'})"
+Write-Ok "勾选结果: Claude Code = $(if($wantClaude){'装'}else{'不装'}) / Codex = $(if($wantCodex){'装'}else{'不装'})$(if($codexComponent){''}else{'（不可用）'}) / OpenClaw = $(if($wantOpenclaw){'装'}else{'不装'})$(if($openclawComponent){''}else{'（不可用）'}) / Pi = $(if($wantPi){'装'}else{'不装'})$(if($piComponent){''}else{'（不可用）'}) / Node = $(if($wantNode){'装'}else{'不装'}) / Debian 12 = $(if($wantDebian){'装'}else{'不装'})"
 
 # ---------------- 6. 准备工作目录并下载自产组件 ----------------
 Write-Step '开始下载组件（支持断点续传 + 实时进度）...'
@@ -587,6 +628,45 @@ if ($wantDebian) {
     } catch {
         Write-Warn "Debian 12 镜像下载/校验失败（$($_.Exception.Message)）。不阻断制作——盘上将无 Linux 安装镜像。"
         $DebianIsoLocal = $null
+    }
+}
+
+# ---------------- 6.8 OpenClaw / Pi / 便携 Node（P-B：勾选了才走；失败降级 installed=false） ----------------
+$Script:NodeZipLocal = $null; $Script:OpenclawTarLocal = $null; $Script:PiTarLocal = $null
+if ($wantNode -and $nodeComponent) {
+    try {
+        Write-Host "  便携 Node $($nodeComponent.version)（约 $($nodeComponent.sizeBytes / 1MB)MB zip，解压后约 ${nodeEstGB}GB）..."
+        $Script:NodeZipLocal = Join-Path $Script:WorkDir $nodeComponent.filename
+        Get-FileViaBITS -Url $nodeComponent.url -Dest $Script:NodeZipLocal -DisplayName "$($nodeComponent.name) ($($nodeComponent.filename))"
+        Test-FileSha256 -Path $Script:NodeZipLocal -Expected $nodeComponent.sha256 -DisplayName $nodeComponent.filename
+        Write-Ok '便携 Node 运行时就绪（官方 SHASUMS 钉值校验通过）'
+    } catch {
+        Write-Warn "便携 Node 下载/校验失败（$($_.Exception.Message)）。OpenClaw/Pi 将无法运行，但不阻断制作。"
+        $Script:NodeZipLocal = $null
+    }
+}
+if ($wantOpenclaw -and $openclawComponent) {
+    try {
+        Write-Host "  OpenClaw $($openclawComponent.version) 预装包（约 $($openclawComponent.sizeBytes / 1MB)MB tar.gz）..."
+        $Script:OpenclawTarLocal = Join-Path $Script:WorkDir $openclawComponent.filename
+        Get-FileViaBITS -Url $openclawComponent.url -Dest $Script:OpenclawTarLocal -DisplayName "$($openclawComponent.name) ($($openclawComponent.filename))"
+        Test-FileSha256 -Path $Script:OpenclawTarLocal -Expected $openclawComponent.sha256 -DisplayName $openclawComponent.filename
+        Write-Ok 'OpenClaw 预装包就绪（发布侧 sha256 校验通过）'
+    } catch {
+        Write-Warn "OpenClaw 下载/校验失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
+        $Script:OpenclawTarLocal = $null
+    }
+}
+if ($wantPi -and $piComponent) {
+    try {
+        Write-Host "  Pi $($piComponent.version) 预装包（约 $($piComponent.sizeBytes / 1MB)MB tar.gz）..."
+        $Script:PiTarLocal = Join-Path $Script:WorkDir $piComponent.filename
+        Get-FileViaBITS -Url $piComponent.url -Dest $Script:PiTarLocal -DisplayName "$($piComponent.name) ($($piComponent.filename))"
+        Test-FileSha256 -Path $Script:PiTarLocal -Expected $piComponent.sha256 -DisplayName $piComponent.filename
+        Write-Ok 'Pi 预装包就绪（发布侧 sha256 校验通过）'
+    } catch {
+        Write-Warn "Pi 下载/校验失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
+        $Script:PiTarLocal = $null
     }
 }
 
@@ -833,6 +913,63 @@ wire_api = "responses"
     }
 }
 
+# 便携 Node / OpenClaw / Pi 落盘（P-B §3.3-3.5：bin\node\ + bin\openclaw\ + bin\pi\）
+# tar.gz 解包用系统自带 bsdtar（Win10 1803+ 的 C:\Windows\System32\tar.exe）；缺失则该项降级不阻断
+$nodeInstalledFinal = $false; $openclawInstalledFinal = $false; $piInstalledFinal = $false
+$haveTar = [bool](Get-Command tar.exe -ErrorAction SilentlyContinue)
+if (-not $haveTar) { Write-Warn '系统缺少 tar.exe（需 Win10 1803+），OpenClaw/Pi 无法解包，本次跳过（不阻断制作）。' }
+if ($Script:NodeZipLocal -and (Test-Path $Script:NodeZipLocal)) {
+    try {
+        $nodeDir = Join-Path $root 'bin\node'
+        if (Test-Path $nodeDir) { Remove-Item -Recurse -Force $nodeDir }
+        Write-Host '  解压便携 Node ...'   # zip 内含 node-vXX-win-x64\ 顶层目录，解压后把内层挪到 bin\node
+        $tmpNode = Join-Path $Script:WorkDir 'node-extract'
+        if (Test-Path $tmpNode) { Remove-Item -Recurse -Force $tmpNode }
+        Expand-Archive -Path $Script:NodeZipLocal -DestinationPath $tmpNode -Force
+        $inner = Get-ChildItem -Directory $tmpNode | Select-Object -First 1
+        if (-not $inner -or -not (Test-Path (Join-Path $inner.FullName 'node.exe'))) { throw 'zip 内未找到 node.exe' }
+        Move-Item $inner.FullName $nodeDir
+        $nodeInstalledFinal = $true
+        Write-Ok '已解压: bin\node\（便携 Node 运行时）'
+    } catch {
+        Write-Warn "便携 Node 落盘失败（$($_.Exception.Message)）。OpenClaw/Pi 将无法运行，不阻断制作。"
+        $nodeInstalledFinal = $false
+    }
+}
+if ($Script:OpenclawTarLocal -and (Test-Path $Script:OpenclawTarLocal) -and $haveTar) {
+    try {
+        $ocDir = Join-Path $root 'bin\openclaw'
+        if (Test-Path $ocDir) { Remove-Item -Recurse -Force $ocDir }
+        New-Item -ItemType Directory -Force -Path $ocDir | Out-Null
+        Write-Host '  解包 OpenClaw 预装包 ...'
+        # tar 内为 node_modules\ 顶层；exFAT 无 symlink，预装包已 --dereference 烤平
+        & tar.exe -xzf $Script:OpenclawTarLocal -C $ocDir
+        if ($LASTEXITCODE -ne 0) { throw "tar.exe 退出码 $LASTEXITCODE" }
+        if (-not (Test-Path (Join-Path $ocDir 'node_modules\openclaw\openclaw.mjs'))) { throw '入口 node_modules\openclaw\openclaw.mjs 缺失' }
+        $openclawInstalledFinal = $true
+        Write-Ok '已解包: bin\openclaw\（OpenClaw，入口 node_modules\openclaw\openclaw.mjs）'
+    } catch {
+        Write-Warn "OpenClaw 落盘失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
+        $openclawInstalledFinal = $false
+    }
+}
+if ($Script:PiTarLocal -and (Test-Path $Script:PiTarLocal) -and $haveTar) {
+    try {
+        $piDir = Join-Path $root 'bin\pi'
+        if (Test-Path $piDir) { Remove-Item -Recurse -Force $piDir }
+        New-Item -ItemType Directory -Force -Path $piDir | Out-Null
+        Write-Host '  解包 Pi 预装包 ...'
+        & tar.exe -xzf $Script:PiTarLocal -C $piDir
+        if ($LASTEXITCODE -ne 0) { throw "tar.exe 退出码 $LASTEXITCODE" }
+        if (-not (Test-Path (Join-Path $piDir 'node_modules\@mariozechner\pi-coding-agent\dist\cli.js'))) { throw '入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js 缺失' }
+        $piInstalledFinal = $true
+        Write-Ok '已解包: bin\pi\（Pi，入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js）'
+    } catch {
+        Write-Warn "Pi 落盘失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
+        $piInstalledFinal = $false
+    }
+}
+
 # 制作时签发 USB token（可选步骤：邮箱验证 → 写 config\auth_token；可跳过，失败不阻塞）
 Initialize-UsbToken -Root $root
 
@@ -850,6 +987,28 @@ if ($codexComponent) {
     $agentsObj['codex'] = [ordered]@{
         installed    = $codexInstalledFinal
         userDeclined = (-not $wantCodex)
+    }
+}
+# P-B：OpenClaw / Pi / Node 勾选语义同上；node 非「引擎」但启动器需据此决定是否PATH前置 bin\node
+if ($openclawComponent) {
+    $agentsObj['openclaw'] = [ordered]@{
+        installed    = $openclawInstalledFinal
+        userDeclined = (-not $wantOpenclaw)
+        version      = [string]$openclawComponent.version
+    }
+}
+if ($piComponent) {
+    $agentsObj['pi'] = [ordered]@{
+        installed    = $piInstalledFinal
+        userDeclined = (-not $wantPi)
+        version      = [string]$piComponent.version
+    }
+}
+if ($nodeComponent) {
+    $agentsObj['node'] = [ordered]@{
+        installed    = $nodeInstalledFinal
+        userDeclined = (-not $wantNode)
+        version      = [string]$nodeComponent.version
     }
 }
 $isosObj = [ordered]@{}
@@ -893,6 +1052,10 @@ if ($codexInstalledFinal) {
 if ($DebianIsoLocal -and (Test-Path (Join-Path $root ('ISO\' + $DebianName)))) {
     Test-FileSha256 -Path (Join-Path $root ('ISO\' + $DebianName)) -Expected $DebianSha256 -DisplayName $DebianName
 }
+# Node / OpenClaw / Pi 盘上复核（P-B：勾选且已落盘才校验；解压产物无法整树 sha，校验关键入口存在性）
+if ($nodeInstalledFinal -and -not (Test-Path (Join-Path $root 'bin\node\node.exe'))) { Die 'bin\node\node.exe 缺失。' '请重新运行制作器。' }
+if ($openclawInstalledFinal -and -not (Test-Path (Join-Path $root 'bin\openclaw\node_modules\openclaw\openclaw.mjs'))) { Die 'bin\openclaw 入口缺失。' '请重新运行制作器。' }
+if ($piInstalledFinal -and -not (Test-Path (Join-Path $root 'bin\pi\node_modules\@mariozechner\pi-coding-agent\dist\cli.js'))) { Die 'bin\pi 入口缺失。' '请重新运行制作器。' }
 
 # ---------------- 11. 完成 ----------------
 Write-Host ""
