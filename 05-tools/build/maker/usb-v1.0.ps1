@@ -1,4 +1,4 @@
-# usb-v1.0.ps1 版本: 1.3.2  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.3  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
 # 版本: 1.3.2（1.3.2：tar 解压容错——exFAT 上链接条目报错时成败改由入口文件判定，配 manifest 1.0.6 硬链烤平重打包）
@@ -22,7 +22,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.2'
+$Script:ScriptVersion   = '1.3.3'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -249,7 +249,9 @@ function Test-FileSha256([string]$Path, [string]$Expected, [string]$DisplayName)
     Write-Host "    校验 $DisplayName SHA256 ..."
     $actual = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
     if ($actual -ne $Expected.ToLowerInvariant()) {
-        throw "$DisplayName SHA256 校验失败！期望 $Expected，实际 $actual。文件可能被篡改或下载损坏。"
+        # 校验失败立即删除坏文件：防止断点续传把毒文件（旧半截+新内容拼接）留给下一轮反复失败
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        throw "$DisplayName SHA256 校验失败！期望 $Expected，实际 $actual。已删除损坏文件，重跑制作器将重新完整下载。"
     }
     Write-Ok "$DisplayName 校验通过"
 }
