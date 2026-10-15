@@ -247,9 +247,9 @@ grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启�
 grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
 [[ $S73 -eq 1 ]] && ok "启动器 0.4.0：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
 
-# 检查 7-4：制作器版本 ps1 1.3.5 + sh 1.3.4（1.3.5：codex 改名拷贝修复，ps1 独有）
-grep -q "ScriptVersion   = '1.3.5'" "$MAKER/usb-v1.0.ps1" && grep -q 'SCRIPT_VERSION="1.3.4"' "$MAKER/usb-v1.0.sh" \
-  && ok "两制作器版本 ps1 1.3.5 + sh 1.3.4（P-B + 进度心跳 + 解压容错 + 进度条 + codex 改名修复）" || bad "制作器版本号未升至预期"
+# 检查 7-4：制作器版本 ps1 1.3.6 + sh 1.3.4
+grep -q "ScriptVersion   = '1.3.6'" "$MAKER/usb-v1.0.ps1" && grep -q 'SCRIPT_VERSION="1.3.4"' "$MAKER/usb-v1.0.sh" \
+  && ok "两制作器版本 ps1 1.3.6 + sh 1.3.4（P-B + 进度心跳 + 解压容错 + 断盘哨兵）" || bad "制作器版本号未升至预期"
 # 1.3.5：robocopy 保留源文件名 → codex 必须拷后改名 codex.exe，否则最终校验 bin\codex.exe 必炸
 grep -q "Copy-FileWithProgress \$Script:CodexExeLocal.*'codex.exe'" "$MAKER/usb-v1.0.ps1" \
   && ok "ps1 codex 落盘改名 codex.exe（robocopy 原名修复）" || bad "ps1 codex 落盘未改名，最终校验会找不到 bin\\codex.exe"

@@ -1,4 +1,4 @@
-# usb-v1.0.ps1 版本: 1.3.5  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.6  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
 # 版本: 1.3.2（1.3.2：tar 解压容错——exFAT 上链接条目报错时成败改由入口文件判定，配 manifest 1.0.6 硬链烤平重打包）
@@ -22,7 +22,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.5'
+$Script:ScriptVersion   = '1.3.6'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -215,9 +215,12 @@ function Expand-WithProgress {
         $p = Start-Process -FilePath $tar.Source -ArgumentList @('-xf', "`"$Archive`"", '-C', "`"$DestDir`"") -PassThru -WindowStyle Hidden
         try {
             while (-not $p.HasExited) {
-                $bytes = (Get-ChildItem $DestDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+                # 不用 -File 动态参数：盘断开时 FileSystem 提供程序解析失败 → 动态参数消失 → 误导性的参数绑定错误
+                $bytes = (Get-ChildItem $DestDir -Recurse -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer } | Measure-Object Length -Sum).Sum
                 if (-not $bytes) { $bytes = 0L }
-                if ($expected -gt 0) {
+                if ($expected -gt 0 -and $bytes -ge $expected) {
+                    Write-Progress -Activity "解压 $Label" -Status ("收尾中，请稍候…（{0:N0} MB 已写满，耗时 {1}）" -f ($bytes/1MB), $sw.Elapsed.ToString('mm\:ss')) -PercentComplete 100
+                } elseif ($expected -gt 0) {
                     Write-Progress -Activity "解压 $Label" -Status ("{0:N0} / {1:N0} MB（耗时 {2}）" -f ($bytes/1MB), ($expected/1MB), $sw.Elapsed.ToString('mm\:ss')) -PercentComplete ([math]::Min(100, [int](100 * $bytes / $expected)))
                 } else {
                     Write-Progress -Activity "解压 $Label" -Status ("已解压 {0:N0} MB（耗时 {1}）" -f ($bytes/1MB), $sw.Elapsed.ToString('mm\:ss'))
@@ -234,9 +237,11 @@ function Expand-WithProgress {
         $job = Start-Job -ScriptBlock { param($a, $d) Expand-Archive -Path $a -DestinationPath $d -Force } -ArgumentList $Archive, $DestDir
         try {
             while ($job.State -eq 'Running') {
-                $bytes = (Get-ChildItem $DestDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+                $bytes = (Get-ChildItem $DestDir -Recurse -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer } | Measure-Object Length -Sum).Sum
                 if (-not $bytes) { $bytes = 0L }
-                if ($expected -gt 0) {
+                if ($expected -gt 0 -and $bytes -ge $expected) {
+                    Write-Progress -Activity "解压 $Label" -Status ("收尾中，请稍候…（{0:N0} MB 已写满，耗时 {1}）" -f ($bytes/1MB), $sw.Elapsed.ToString('mm\:ss')) -PercentComplete 100
+                } elseif ($expected -gt 0) {
                     Write-Progress -Activity "解压 $Label" -Status ("{0:N0} / {1:N0} MB（耗时 {2}）" -f ($bytes/1MB), ($expected/1MB), $sw.Elapsed.ToString('mm\:ss')) -PercentComplete ([math]::Min(100, [int](100 * $bytes / $expected)))
                 } else {
                     Write-Progress -Activity "解压 $Label" -Status ("已解压 {0:N0} MB（耗时 {1}）" -f ($bytes/1MB), $sw.Elapsed.ToString('mm\:ss'))
@@ -1037,6 +1042,12 @@ if ($Script:PiTarLocal -and (Test-Path $Script:PiTarLocal) -and $haveTar) {
         Write-Warn "Pi 落盘失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
         $piInstalledFinal = $false
     }
+}
+
+# 断盘哨兵：大文件解包是断盘高发段，之后确认 U盘还挂载着，不在就停下（人话报错，别让后续步骤撞出参数/驱动器类误导错误）
+if (-not (Test-Path (Join-Path $root 'config'))) {
+    Write-Host "    [错误] U盘在中途断开（$root 已不可访问）。这根盘不稳定，建议换盘后重做；已写入的部分无需保留。" -ForegroundColor Red
+    exit 1
 }
 
 # 制作时签发 USB token（可选步骤：邮箱验证 → 写 config\auth_token；可跳过，失败不阻塞）
