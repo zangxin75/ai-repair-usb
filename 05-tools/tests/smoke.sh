@@ -256,7 +256,7 @@ S75=1
 grep -q 'Expand-WithProgress' "$MAKER/usb-v1.0.ps1" || { S75=0; bad "usb-v1.0.ps1 缺 Expand-WithProgress"; }
 grep -q 'Write-Progress' "$MAKER/usb-v1.0.ps1" || { S75=0; bad "usb-v1.0.ps1 缺 Write-Progress"; }
 grep -q 'extract_progress' "$MAKER/usb-v1.0.sh" || { S75=0; bad "usb-v1.0.sh 缺 extract_progress"; }
-grep -q 'Expand-Archive -Path \$' "$MAKER/usb-v1.0.ps1" && { S75=0; bad "ps1 仍有无进度 Expand-Archive 直调残留"; }
+[ "$(grep -c 'Expand-Archive -Path' "$MAKER/usb-v1.0.ps1")" -le 1 ] || { S75=0; bad "ps1 仍有无进度 Expand-Archive 直调残留（仅允许 helper 回退分支 1 处）"; }
 [[ $S75 -eq 1 ]] && ok "两制作器：解压进度心跳（tar.exe 加速 + Write-Progress / du 轮询）"
 
 echo
