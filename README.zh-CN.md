@@ -2,7 +2,7 @@
 
 > 坏电脑：U盘启动进中文 AI 维修系统，对话就能修。好电脑：同一根 U盘插上就是免安装 AI 工作站——Claude Code、Codex CLI，零安装、零残留。**工具跟人走，不跟机器走。**
 
-[![Release](https://img.shields.io/badge/release-v0.3-blue.svg)](../../releases) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![English](https://img.shields.io/badge/README-English-red.svg)](README.md)
+[![Release](https://img.shields.io/github/v/release/zangxin75/ai-repair-usb)](../../releases) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![English](https://img.shields.io/badge/README-English-red.svg)](README.md)
 
 ![启动演示](assets/demo-boot.gif)
 
