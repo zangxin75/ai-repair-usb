@@ -1,4 +1,4 @@
-# build-mac-dualboot.ps1 版本: 0.1-experiment  (AI 电脑维修 U盘 · Mac 双引导实验脚本)
+﻿# build-mac-dualboot.ps1 版本: 0.1-experiment  (AI 电脑维修 U盘 · Mac 双引导实验脚本)
 # 创建日期: 2026-10-17 / 版本 0.1 / 状态: 实验脚本（未并入正式制作器）/ 作者: Claude Code + kt
 #
 # 目的：给现有 Ventoy U盘 增加「Mac 直启分区」，解决 Intel Mac 上 Ventoy 黑屏问题。
