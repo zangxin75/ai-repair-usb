@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.4.7  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.5.0  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -17,17 +17,20 @@
 #requires -Version 5.1
 param(
     # 防提权循环标记：自提升重入时携带；也用于绕过模式菜单直接进维修流程
-    [switch]$Elevated
+    [switch]$Elevated,
+    # 0.5.0：自更新完成后重启时携带，避免新进程再次拉 manifest（已刚更新完）
+    [switch]$NoUpdate
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.4.7'
+$Script:ScriptVersion   = '0.5.0'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
 $Script:TempRoot        = Join-Path $env:TEMP 'ai-repair'          # 临时工作副本根（%TEMP%\ai-repair\）
 $Script:TempClaudeDir   = Join-Path $Script:TempRoot 'claude'      # CLAUDE_CONFIG_DIR 指向（R27）
 $Script:ClaudeInstallUrl = 'https://claude.ai/install.ps1'         # 官方安装器唯一渠道（供应链红线）
+$Script:UpdateManifestUrl = 'https://usb.tokeneff.com/maker/manifest.json'  # 唯一版本源（0.5.0 分层更新）
 $Script:UpgradeUrlFile  = 'upgrade-url.txt'                        # U盘根预置升级入口文件（方案 6.4 软着陆）
 $Script:DefaultGatewayBase = 'https://tokeneff.com'
 
@@ -708,6 +711,77 @@ function Invoke-ExitCleanup() {
     exit 0
 }
 
+# ---------------- 0.5 在线自更新（0.5.0：分层更新策略 · 第一/二层） ----------------
+# 策略定稿 2026-10-16：轻资产（人格/技能，KB 级）启动时静默哈希同步；启动器本体有新版则
+# 两段式替换后自重启；重组件（bin\ 下 OpenClaw/Pi/Node/Codex，30-160MB）不自动更新，
+# 走菜单主动更新（后续实现）；GB 级 ISO 永不在线更新，Web 制作器重做 U盘是唯一升级通道。
+# 红线：所有下载 sha256 校验（manifest 钉值）；exFAT 两段式替换（.new → Move-Item），
+# 任何失败 → 告警后离线继续，绝不阻塞维修主流程。
+function Update-SelfFromManifest {
+    # 提权重入不检查：自替换+重启会丢失管理员身份，维修优先
+    if ($Script:Elevated -or $NoUpdate) { return }
+    if ([string]::IsNullOrWhiteSpace($PSCommandPath)) { return }   # 管道执行无法自替换
+
+    Write-Step '检查更新 ...'
+    $m = $null
+    try {
+        $m = Invoke-RestMethod -Uri $Script:UpdateManifestUrl -TimeoutSec 15 -ErrorAction Stop
+    } catch {
+        Write-Warn '检查更新失败（更新源不可达），离线模式继续。'
+        return
+    }
+    $wc = New-Object System.Net.WebClient
+
+    # ── 第二层：轻资产哈希同步（KB 级，静默；差异文件才下载） ──
+    $synced = 0
+    foreach ($a in @($m.assets)) {
+        if (-not $a.path -or -not $a.url -or -not $a.sha256) { continue }
+        try {
+            $local = Join-Path $Script:UsbRoot $a.path
+            $need = $true
+            if (Test-Path $local) {
+                $need = ((Get-FileHash -Path $local -Algorithm SHA256).Hash.ToLower() -ne $a.sha256.ToLower())
+            }
+            if ($need) {
+                New-Item -ItemType Directory -Force -Path (Split-Path $local -Parent) | Out-Null
+                $tmp = "$local.new"
+                $wc.DownloadFile($a.url, $tmp)
+                if ((Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower() -ne $a.sha256.ToLower()) {
+                    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+                    throw 'sha256 校验失败'
+                }
+                Move-Item $tmp $local -Force    # exFAT 两段式
+                $synced++
+            }
+        } catch {
+            Write-Warn "资产更新失败（$($a.path)）：$($_.Exception.Message)，保留本地现有版本。"
+        }
+    }
+    if ($synced -gt 0) { Write-Ok "轻资产已同步 $synced 个文件（技能/人格最新版）。" }
+
+    # ── 第一层：启动器本体更新（有新版：校验 + 两段式替换 + 自重启） ──
+    try {
+        if ($m.launcher -and $m.launcher.version -and ([version]$m.launcher.version -gt [version]$Script:ScriptVersion)) {
+            Write-Host "  发现启动器新版本 $($m.launcher.version)（当前 $Script:ScriptVersion），正在升级 ..." -ForegroundColor Yellow
+            $newFile = "$PSCommandPath.new"
+            $wc.DownloadFile($m.launcher.url, $newFile)
+            if ((Get-FileHash -Path $newFile -Algorithm SHA256).Hash.ToLower() -ne $m.launcher.sha256.ToLower()) {
+                Remove-Item $newFile -Force -ErrorAction SilentlyContinue
+                throw 'sha256 校验失败'
+            }
+            Move-Item $newFile $PSCommandPath -Force   # 运行中的 ps1 仅解析期持有句柄，可安全替换
+            Write-Ok '启动器已升级，正在以新版本重启 ...'
+            Start-Sleep -Seconds 1
+            Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-NoUpdate'
+            )
+            exit 0
+        }
+    } catch {
+        Write-Warn "启动器升级失败：$($_.Exception.Message)，本次以当前版本继续。"
+    }
+}
+
 # ---------------- 0. 版本输出 ----------------
 Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan
@@ -755,6 +829,9 @@ if ($balance.verification_required -eq $true) {
         Write-Warn '未完成邮箱验证：维修会话可能受限（超阈值未验证的 key 将被网关降档）。可稍后在菜单中重新触发。'
     }
 }
+
+# --- 在线更新检查（0.5.0）：轻资产静默同步 + 启动器自更新；失败离线继续 ---
+Update-SelfFromManifest
 
 # --- 模式菜单（P-A A2：菜单先于提权，选「维修模式」才触发 UAC） ---
 # 激活/余额/邮箱验证对三种模式共用，已在上方完成；[2]/[3] 全程普通权限。
