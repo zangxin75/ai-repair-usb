@@ -204,7 +204,7 @@ function Invoke-GatewayApi([string]$Method, [string]$Url, [hashtable]$Body, [str
                 ErrorAction = 'Stop'
             }
             if ($Body) { $params.Body = ($Body | ConvertTo-Json); $params.ContentType = 'application/json' }
-            if ($AuthKey) { $params.Headers = @{ Authorization = $AuthKey } }
+            if ($AuthKey) { $params.Headers = @{ Authorization = "Bearer $AuthKey" } }   # 后端 /api/usb/* 校验 Bearer 前缀，裸 key 会 401
             return Invoke-RestMethod @params
         } catch {
             $lastErr = $_
