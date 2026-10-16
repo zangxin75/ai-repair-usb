@@ -1,7 +1,8 @@
-# usb-v1.0.ps1 版本: 1.3.7  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.8  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.7（1.3.7：掉盘鲁棒性——两段式落盘（本机暂存→对账拷贝）、下载缓存保留（换盘重跑免重下）、
+# 版本: 1.3.8（1.3.7 + 维修技能投放：config\claude-skills\（6 个 SKILL.md，与 Live ISO 同源））
+# 1.3.7（1.3.7：掉盘鲁棒性——两段式落盘（本机暂存→对账拷贝）、下载缓存保留（换盘重跑免重下）、
 #       掉盘检测+nonce 重定位恢复+三振退出、组件落盘三对账、agents.json 原子写、断盘哨兵改走恢复路径）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
 # 兼容: PowerShell 5.1+（Win10/Win11 自带，不依赖第三方工具）
@@ -23,7 +24,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.7'
+$Script:ScriptVersion   = '1.3.8'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -1117,6 +1118,30 @@ if ($wantClaude) {
         $wc.DownloadFile('https://usb.tokeneff.com/maker/office-CLAUDE.md', (Join-Path $officeDir 'CLAUDE.md'))
         Write-Ok '已放入: config\office\CLAUDE.md（办公助手人格）'
     } catch { Write-Warn "office-CLAUDE.md 获取失败（$($_.Exception.Message)）。不影响制作——办公模式将以通用模式启动。" }
+}
+
+# 维修技能（6 个，与 Live ISO 内置同源）：config\claude-skills\<名>\SKILL.md（勾选了 claude 才投放；
+# 启动器在维修会话启动时拷入临时 CLAUDE_CONFIG_DIR\skills\，见 Initialize-ClaudeConfigDir）
+if ($wantClaude) {
+    $skillsDir = Join-Path $Script:UsbRoot 'config\claude-skills'
+    New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
+    $wc = New-Object System.Net.WebClient
+    $wc.Headers.Add('User-Agent', "ai-repair-usb-maker/$Script:ScriptVersion")
+    $skillNames = @('systematic-debugging', 'verification-before-completion', 'smart-diagnosis',
+                    'data-rescue', 'network-triage', 'reinstall-guardrail')
+    $got = 0
+    foreach ($n in $skillNames) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $skillsDir $n) | Out-Null
+        try {
+            $wc.DownloadFile("https://usb.tokeneff.com/maker/claude-skills/$n.md", (Join-Path $skillsDir "$n\SKILL.md"))
+            $got++
+        } catch { }
+    }
+    if ($got -gt 0) {
+        Write-Ok "已放入: config\claude-skills\（维修技能 $got/6 个）"
+    } else {
+        Write-Warn 'claude-skills 获取失败（0/6）。不影响制作——维修会话将以无技能模式启动。'
+    }
 }
 
 # Codex CLI 落盘（P-A A3/A4：bin\codex.exe + config\codex\config.toml）

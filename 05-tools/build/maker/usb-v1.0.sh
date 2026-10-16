@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.3.7  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.3.8  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.7（1.3.7：掉盘鲁棒性——下载缓存固定到 ~/.cache 跨次保留、两段式落盘（本机暂存→rsync 对账拷入）、
+# 版本: 1.3.8（1.3.7：掉盘鲁棒性——下载缓存固定到 ~/.cache 跨次保留、两段式落盘（本机暂存→rsync 对账拷入）、
 #       掉盘检测（mountpoint）+ nonce 重定位恢复 + 三振退出、agents.json 原子写。目标平台=Linux（依赖 util-linux））
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.3.7"
+SCRIPT_VERSION="1.3.8"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -847,6 +847,22 @@ if [ "$WANT_CLAUDE" = "1" ]; then
         c_ok "已放入: config/office/CLAUDE.md（办公助手人格）"
     else
         c_warn "office-CLAUDE.md 获取失败。不影响制作——办公模式将以通用模式启动。"
+    fi
+fi
+
+# 维修技能（6 个，与 Live ISO 内置同源）：config/claude-skills/<名>/SKILL.md（勾选了 claude 才投放）
+if [ "$WANT_CLAUDE" = "1" ]; then
+    got=0
+    for n in systematic-debugging verification-before-completion smart-diagnosis data-rescue network-triage reinstall-guardrail; do
+        mkdir -p "$MNT/config/claude-skills/$n"
+        if fetch_retry "https://usb.tokeneff.com/maker/claude-skills/$n.md" "$MNT/config/claude-skills/$n/SKILL.md"; then
+            got=$((got+1))
+        fi
+    done
+    if [ "$got" -gt 0 ]; then
+        c_ok "已放入: config/claude-skills/（维修技能 $got/6 个）"
+    else
+        c_warn "claude-skills 获取失败（0/6）。不影响制作——维修会话将以无技能模式启动。"
     fi
 fi
 

@@ -72,8 +72,8 @@
       "name": "openclaw",
       "filename": "openclaw-2026.10.3.tar.gz",
       "url": "https://usb.tokeneff.com/downloads/openclaw-2026.10.3.tar.gz",
-      "sizeBytes": 162046273,
-      "sha256": "ad4b4bee1c55ffcd26eac9be784639f85190389e01b76372d57c5c4fc6ca84a4",
+      "sizeBytes": 162004649,
+      "sha256": "23d16128fc502bc41596ef3ba35d5fe749027152887f92e9c17a82f3674fe83a",
       "required": false,
       "version": "2026.10.3",
       "notes": "OpenClaw v2026.10.3 自包含 node_modules 预装包（npm 官方源 --os=win32 --cpu=x64 --omit=dev --ignore-scripts 安装，win32 原生二进制已含：koffi/node-pty/esbuild 等；--dereference --hard-dereference 打包烤平符号/硬链接以兼容 exFAT——1.0.6 修正：仅 --dereference 残留 npm 内部 34 个硬链，Windows tar.exe 在 exFAT 建 hardlink 报 Invalid argument）。解到 U盘 bin\\openclaw\\，入口 node_modules\\openclaw\\openclaw.mjs。来源: https://www.npmjs.com/package/openclaw"

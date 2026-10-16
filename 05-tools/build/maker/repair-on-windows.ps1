@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.4.0  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.4.3  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -21,7 +21,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.4.0'
+$Script:ScriptVersion   = '0.4.3'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -360,6 +360,13 @@ function Initialize-ClaudeConfigDir() {
     } else {
         Write-Warn "U盘缺少 config\claude-config\，已创建空临时配置目录"
     }
+    # 维修技能（0.4.1）：config\claude-skills\* → 临时配置 skills\（缺失不报错，维修会话以无技能模式启动）
+    $skillsSrc = Join-Path $Script:ConfigDir 'claude-skills'
+    if (Test-Path $skillsSrc) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $Script:TempClaudeDir 'skills') | Out-Null
+        Copy-Item -Path (Join-Path $skillsSrc '*') -Destination (Join-Path $Script:TempClaudeDir 'skills') -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Ok '维修技能已载入临时配置（config\claude-skills\ → skills\）'
+    }
     # 注意：全程不触碰 %USERPROFILE%\.claude\（R28 零覆写红线）
     $env:CLAUDE_CONFIG_DIR = $Script:TempClaudeDir
 }
@@ -528,8 +535,30 @@ function Start-NodeAgentSession([string]$Name) {
     $env:npm_config_cache = Join-Path $Script:ConfigDir 'npm-cache'
     $stateDir = Join-Path $Script:ConfigDir $Name
     New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
-    if ($Name -eq 'openclaw') { $env:OPENCLAW_STATE_DIR = $stateDir; $env:OPENCLAW_CONFIG_DIR = $stateDir }
-    else { $env:PI_CONFIG_DIR = $stateDir; $env:PI_HOME = $stateDir }
+    if ($Name -eq 'openclaw') {
+        # 0.4.3：OpenClaw 只认 OPENCLAW_STATE_DIR / OPENCLAW_CONFIG_PATH（CONFIG_DIR 是无效变量——
+        # 曾致状态写到客户机 %USERPROFILE%\.openclaw\）；入口须用 chat 子命令（本地 TUI），
+        # 裸跑默认命令会去连本机 gateway（ECONNREFUSED → "CLI command failed"）
+        $env:OPENCLAW_STATE_DIR = $stateDir
+        $env:OPENCLAW_CONFIG_PATH = (Join-Path $stateDir 'openclaw.json')
+    }
+    else {
+        # Pi 0.73.1 只认 PI_CODING_AGENT_DIR（PI_CONFIG_DIR/PI_HOME 是无效变量——曾致 Pi 把配置写到
+        # 客户机 %USERPROFILE%\.pi\，违反零残留红线且读不到网关配置）
+        $env:PI_CODING_AGENT_DIR = $stateDir
+        # 网关自定义 provider（models.json）：Pi 内置 anthropic 模型钉死 api.anthropic.com，必须自定义
+        # provider 才能走到 tokenEff 网关；apiKey 用环境变量名（TOKENEFF_PI_KEY），token 不落盘
+        $env:TOKENEFF_PI_KEY = $token
+        $mj = @{ providers = @{ tokeneff = @{
+            baseUrl = 'https://tokeneff.com'
+            api     = 'anthropic-messages'
+            apiKey  = 'TOKENEFF_PI_KEY'
+            models  = @(@{ id = 'glm-5.2'; name = 'GLM 5.2'; reasoning = $false; input = @('text')
+                           cost = @{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                           contextWindow = 128000; maxTokens = 8192 }) } } }
+        [IO.File]::WriteAllText((Join-Path $stateDir 'models.json'),
+            ($mj | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    }
     # PATH 前置 bin\node 与便携 Git（与 Claude/Codex 会话共用）
     $pg = Join-Path $binDir 'portablegit'
     if (Test-Path (Join-Path $pg 'bin\bash.exe')) {
@@ -538,7 +567,8 @@ function Start-NodeAgentSession([string]$Name) {
         $env:PATH = "$binDir\node;$binDir;$env:PATH"
     }
     Write-Step "启动 $title 会话（退出会话后返回本菜单）"
-    & $nodeExe $entry
+    $entryArgs = @(); if ($Name -eq 'openclaw') { $entryArgs = @('chat') }
+    & $nodeExe $entry @entryArgs
     Write-Host ''
     Write-Ok '会话已结束，按回车返回'
     Read-Host | Out-Null
