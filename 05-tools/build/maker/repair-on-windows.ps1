@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.5.0  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.5.1  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -23,7 +23,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.5.0'
+$Script:ScriptVersion   = '0.5.1'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -698,9 +698,15 @@ function Invoke-ExitCleanup() {
     }
     # enterprise 模式：本地记录/会话历史保留由收尾任务文本驱动，脚本不硬编码删除（方案功能 4 定稿）
     if ($Script:RecordMode -eq 'enterprise') {
+        if (Test-UsbAutoLaunch) { Write-Host '    [企业运维模式] 保留本机「插入自动弹出」注册（师傅自用机常驻）。' -ForegroundColor Cyan }
         Write-Host '    [企业运维模式] 会话历史与维修记录按企业模式保留（可审计可续修），' -ForegroundColor Cyan
         Write-Host '    收尾清理请按维修会话中的收尾任务指引执行。' -ForegroundColor Cyan
     } else {
+        # 0.5.1：上门模式无痕迹红线——若本机注册过「插入自动弹出」则顺带移除
+        if (Test-UsbAutoLaunch) {
+            try { Remove-UsbAutoLaunch; Write-Ok '已移除本机「插入自动弹出」注册（无痕迹红线）' }
+            catch { Write-Warn "「插入自动弹出」注册移除失败（需手动清理）: $($_.Exception.Message)" }
+        }
         Write-Ok '上门服务模式：本机无维修痕迹残留（会话历史随临时目录一并清理）'
     }
     Write-Host ''
@@ -780,6 +786,53 @@ function Update-SelfFromManifest {
     } catch {
         Write-Warn "启动器升级失败：$($_.Exception.Message)，本次以当前版本继续。"
     }
+}
+
+# ---------------- 0.6 U盘插入自动弹出（0.5.1：本机记忆，opt-in） ----------------
+# 原理：注册「事件触发计划任务」——System 的 Kernel-PnP 事件 410（设备启动，该日志默认开启）
+# 命中后由核对脚本把关：插入卷的序列号 == 本U盘序列号 才启动 AI-Workstation.bat，其它U盘静默。
+# 触发器不加 USBSTOR 过滤（UserData XPath 兼容性不稳），靠序列号门禁兜底（多弹一个隐藏 2 秒的
+# powershell 进程，无感）。需管理员注册（维修模式内天然具备）；上门服务模式退出清理时顺带移除（无痕迹红线）。
+$Script:AutoLaunchTaskName = 'AI-Repair-USB-AutoLaunch'
+
+function Get-UsbVolumeSerial {
+    # U盘根所在卷的序列号（注册与触发均用 Get-Volume 同一来源，口径一致）
+    try {
+        $dl = ($Script:UsbRoot -replace '^([A-Za-z]:).*$', '$1').Substring(0, 1)
+        return (Get-Volume -DriveLetter $dl -ErrorAction Stop).SerialNumber
+    } catch { return $null }
+}
+
+function Test-UsbAutoLaunch {
+    return [bool](Get-ScheduledTask -TaskName $Script:AutoLaunchTaskName -ErrorAction SilentlyContinue)
+}
+
+function Register-UsbAutoLaunch {
+    if (-not $Script:IsAdmin) { Write-Warn '注册需要管理员权限，请重选「维修模式」提权后再试。'; return $false }
+    $serial = Get-UsbVolumeSerial
+    if (-not $serial) { Write-Warn '无法读取U盘卷序列号，注册取消。'; return $false }
+    # 核对脚本（任务动作执行）：单引号风格避免与任务参数外层双引号打架
+    $inner = "`$s = '$serial'; " +
+        "Start-Sleep -Seconds 2; " +
+        "Get-Volume -ErrorAction SilentlyContinue | " +
+        "Where-Object { `$_.SerialNumber -eq `$s -and `$_.DriveLetter } | " +
+        "ForEach-Object { `$p = `$_.DriveLetter + ':\AI-Workstation.bat'; if (Test-Path `$p) { Start-Process `$p } }"
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$inner`""
+    # 事件触发器：New-ScheduledTaskTrigger 不支持事件类，需 CIM 实例
+    $sub = "<QueryList><Query Id='0' Path='Microsoft-Windows-Kernel-PnP/Configuration'>" +
+        "<Select Path='Microsoft-Windows-Kernel-PnP/Configuration'>*[System[EventID=410]]</Select>" +
+        "</Query></QueryList>"
+    $cls  = Get-CimClass -Namespace 'root/Microsoft/Windows/TaskScheduler' -ClassName 'MSFT_TaskEventTrigger'
+    $trig = New-CimInstance -CimClass $cls -ClientOnly -Property @{ Subscription = $sub }
+    Register-ScheduledTask -TaskName $Script:AutoLaunchTaskName -Action $action -Trigger $trig `
+        -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)) `
+        -Description 'AI 维修U盘插入自动弹出（按卷序列号匹配本U盘，其它U盘不触发）' -Force | Out-Null
+    return (Test-UsbAutoLaunch)
+}
+
+function Remove-UsbAutoLaunch {
+    Unregister-ScheduledTask -TaskName $Script:AutoLaunchTaskName -Confirm:$false -ErrorAction Stop
 }
 
 # ---------------- 0. 版本输出 ----------------
@@ -892,6 +945,7 @@ while ($true) {
                 else { Write-Host "  [1] 只读诊断（收集信息 + 给出建议，不改系统）"
                     Write-Host "  [2] 维修会话（不可用：未获得管理员权限，请退回上级菜单重选「维修模式」并同意 UAC）" -ForegroundColor DarkGray }
                 Write-Host "  [3] 余额查询"
+                Write-Host "  [4] U盘插入自动弹出（本机记忆，当前：$(if (Test-UsbAutoLaunch) { '已开启' } else { '未开启' })）"
                 Write-Host "  [0] 返回上级菜单"
                 $sub = (Read-Host '请输入编号').Trim()
                 switch ($sub) {
@@ -912,8 +966,17 @@ while ($true) {
                         Write-Ok "本周剩余: $($b.remaining_weekly) token / 本月累计: $($b.total_used_monthly) / 有效期至: $($b.expires_at)"
                         if ($b.verification_required -eq $true) { Invoke-EmailVerification -Key $Script:AuthKey | Out-Null }
                     }
+                    '4' {
+                        # 0.5.1：插入自动弹出开关（toggle；注册需管理员，维修模式内已具备）
+                        if (Test-UsbAutoLaunch) {
+                            try { Remove-UsbAutoLaunch; Write-Ok '已关闭：本机插入这只U盘不再自动弹出。' }
+                            catch { Write-Warn "移除失败：$($_.Exception.Message)" }
+                        } elseif (Register-UsbAutoLaunch) {
+                            Write-Ok '已开启：本机插入这只U盘（按卷序列号识别）将自动弹出启动页。'
+                        }
+                    }
                     '0' { break }
-                    default { Write-Warn '输入无效，请输入 0-3 的编号。' }
+                    default { Write-Warn '输入无效，请输入 0-4 的编号。' }
                 }
             }
         }
