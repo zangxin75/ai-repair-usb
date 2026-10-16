@@ -322,7 +322,11 @@ function Invoke-EmailVerification([string]$Key) {
     }
     $verifyUrl = ($Script:Conf['BALANCE_URL'] -replace '/balance$') + '/verify'
     try {
-        Invoke-GatewayApi -Method Post -Url $verifyUrl -Body @{ key = $Key; email = $email } | Out-Null
+        $vr = Invoke-GatewayApi -Method Post -Url $verifyUrl -Body @{ key = $Key; email = $email }
+        if ($vr.already_verified) {
+            Write-Ok '该凭证此前已通过邮箱验证，无需复核'
+            return $true
+        }
         Write-Ok '验证码已发送（有效期 10 分钟，请查收邮箱，注意垃圾箱）'
     } catch {
         $code = Get-HttpStatusCode -Err $_
