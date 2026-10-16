@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.4.5  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.4.6  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -21,7 +21,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.4.5'
+$Script:ScriptVersion   = '0.4.6'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -554,9 +554,14 @@ function Start-NodeAgentSession([string]$Name) {
                 baseUrl = 'https://tokeneff.com'
                 api     = 'anthropic-messages'
                 apiKey  = '${TOKENEFF_OC_KEY}'
+                # 0.4.6：compat.cacheControlFormat=anthropic —— OpenClaw 仅在模型声明
+                # 此兼容位时才给 system/末工具/末消息打 cache_control 标记（extra-params
+                # 实证：compatEligible 门控），否则网关 glm-5.2 passthrough 的块级缓存
+                # 全程 0% 命中，13k 上下文每轮全价重算（首字延迟+token 双输）
                 models  = @(@{ id = 'glm-5.2'; name = 'GLM 5.2'; reasoning = $false; input = @('text')
                                cost = @{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
-                               contextWindow = 128000; maxTokens = 8192 }) } } }
+                               contextWindow = 128000; maxTokens = 8192
+                               compat  = @{ cacheControlFormat = 'anthropic' } }) } } }
             agents = @{ defaults = @{ model = @{ primary = 'tokeneff/glm-5.2' } } }
         }
         [IO.File]::WriteAllText((Join-Path $stateDir 'openclaw.json'),
