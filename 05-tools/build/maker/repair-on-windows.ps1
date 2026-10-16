@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.4.3  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.4.4  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -21,7 +21,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.4.3'
+$Script:ScriptVersion   = '0.4.4'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -536,9 +536,10 @@ function Start-NodeAgentSession([string]$Name) {
     $stateDir = Join-Path $Script:ConfigDir $Name
     New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
     if ($Name -eq 'openclaw') {
-        # 0.4.3：OpenClaw 只认 OPENCLAW_STATE_DIR / OPENCLAW_CONFIG_PATH（CONFIG_DIR 是无效变量——
-        # 曾致状态写到客户机 %USERPROFILE%\.openclaw\）；入口须用 chat 子命令（本地 TUI），
-        # 裸跑默认命令会去连本机 gateway（ECONNREFUSED → "CLI command failed"）
+        # 0.4.4：状态必须放本机 NTFS（%TEMP%\ai-repair\openclaw，退出随 TempRoot 统一清理）——
+        # OpenClaw 用 SQLite 存状态，exFAT 不支持其锁机制，写 U盘直接 EIO；模型接入靠
+        # ANTHROPIC_BASE_URL/AUTH_TOKEN 环境变量（0.4.3：CONFIG_DIR 是无效变量，勿用）
+        $stateDir = Join-Path $Script:TempRoot 'openclaw'
         $env:OPENCLAW_STATE_DIR = $stateDir
         $env:OPENCLAW_CONFIG_PATH = (Join-Path $stateDir 'openclaw.json')
     }

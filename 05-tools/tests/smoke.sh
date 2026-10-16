@@ -237,15 +237,15 @@ done
 grep -q -- '--agents claude,codex,openclaw,pi,node,linux' "$MAKER/usb-v1.0.sh" || { S72=0; bad "usb-v1.0.sh --agents 用法未列 openclaw/pi/node"; }
 [[ $S72 -eq 1 ]] && ok "两制作器：OpenClaw/Pi 勾选 + Node 运行时 + --agents 扩展"
 
-# 检查 7-3：启动器 0.4.3 含 OpenClaw/Pi 入口（agents.json 驱动显隐 + node 直启）
+# 检查 7-3：启动器 0.4.4 含 OpenClaw/Pi 入口（agents.json 驱动显隐 + node 直启）
 S73=1
-grep -q "ScriptVersion   = '0.4.3'" "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器版本应为 0.4.0"; }
+grep -q "ScriptVersion   = '0.4.4'" "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器版本应为 0.4.0"; }
 grep -q 'Start-NodeAgentSession' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器缺 Start-NodeAgentSession"; }
 grep -q 'openclaw.mjs' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器缺 OpenClaw 入口路径"; }
 grep -q 'OPENCLAW_STATE_DIR' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器缺 OpenClaw 状态目录重定向"; }
 grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启动器缺 npm 缓存重定向（零残留）"; }
 grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
-[[ $S73 -eq 1 ]] && ok "启动器 0.4.3：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
+[[ $S73 -eq 1 ]] && ok "启动器 0.4.4：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
 
 # 检查 7-4：制作器版本 1.3.8（四处全改：ps1 头注释+常量、sh 头注释+常量）
 S74=1
