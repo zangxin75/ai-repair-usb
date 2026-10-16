@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.5.3  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.5.4  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -23,7 +23,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.5.3'
+$Script:ScriptVersion   = '0.5.4'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -902,7 +902,7 @@ while ($true) {
         Write-Host ""
         Write-Host "---------------- 模式菜单 ----------------" -ForegroundColor Cyan
         Write-Host "  [1] 维修模式（Claude · 需管理员权限，处理系统级问题）"
-        Write-Host "  [2] 办公助手模式（推荐 Pi · 无需提权，写文档/表格/文案$(if (-not ($Script:PiInstalled -and (Test-Path (Join-Path $Script:UsbRoot 'bin\node\node.exe')))) { '；未装 Pi，本次用 Claude' })）"
+        Write-Host "  [2] 办公 / 轻编码（推荐 Pi · 无需提权，写文档/表格/文案/轻量编码$(if (-not ($Script:PiInstalled -and (Test-Path (Join-Path $Script:UsbRoot 'bin\node\node.exe')))) { '；未装 Pi，本次用 Claude' })）"
         Write-Host "  [3] 查询余额 / 管理账号"
         if ($Script:CodexInstalled) {
             Write-Host "  [4] Codex CLI（命令行 AI 助手，OpenAI 风格）"
@@ -914,12 +914,7 @@ while ($true) {
         } elseif ($Script:OpenclawDeclined) {
             Write-Host "  [5] OpenClaw（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
         }
-        if ($Script:PiInstalled) {
-            Write-Host "  [6] Pi（办公助理 / 轻量编码）$(if (-not $Script:NodeInstalled) { '（Node 运行时缺失，重跑制作命令可补装）' })"
-        } elseif ($Script:PiDeclined) {
-            Write-Host "  [6] Pi（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
-        }
-        Write-Host "  [7] 编码模式（Claude · 软件开发/脚本，无需提权；轻编码/办公推荐 [6] Pi）"
+        Write-Host "  [6] 编码模式（Claude · 软件开发/脚本，无需提权；轻编码/办公走 [2] Pi）"
         Write-Host "  [0] 退出（清理本机临时文件）"
         $choice = (Read-Host '请输入编号').Trim()
     }
@@ -1020,11 +1015,6 @@ while ($true) {
             else { Write-Warn '输入无效。' }
         }
         '6' {
-            if ($Script:PiInstalled) { Start-NodeAgentSession -Name 'pi' }
-            elseif ($Script:PiDeclined) { Write-Warn '此盘未安装 Pi（制作时未勾选）。重跑制作命令可补装。' }
-            else { Write-Warn '输入无效。' }
-        }
-        '7' {
             # 0.5.2 编码模式：主力编码 Claude（重编码/工程级）；闸门同办公模式（用尽拦截，低余额提醒）
             if ($exhausted) {
                 Write-Warn '本周免费额度已用完，无法进入编码会话。'
@@ -1035,6 +1025,6 @@ while ($true) {
             }
         }
         '0' { Invoke-ExitCleanup }
-        default { Write-Warn '输入无效，请输入 0-7 的编号。' }
+        default { Write-Warn '输入无效，请输入 0-6 的编号。' }
     }
 }
