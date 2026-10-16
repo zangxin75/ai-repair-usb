@@ -1,7 +1,7 @@
-# usb-v1.0.ps1 版本: 1.3.8  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+# usb-v1.0.ps1 版本: 1.3.9  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.8（1.3.7 + 维修技能投放：config\claude-skills\（6 个 SKILL.md，与 Live ISO 同源））
+# 版本: 1.3.9（1.3.7 + 维修技能投放：config\claude-skills\（6 个 SKILL.md，与 Live ISO 同源））
 # 1.3.7（1.3.7：掉盘鲁棒性——两段式落盘（本机暂存→对账拷贝）、下载缓存保留（换盘重跑免重下）、
 #       掉盘检测+nonce 重定位恢复+三振退出、组件落盘三对账、agents.json 原子写、断盘哨兵改走恢复路径）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
@@ -24,7 +24,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.3.8'
+$Script:ScriptVersion   = '1.3.9'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -71,9 +71,31 @@ $ProgressPreference    = 'SilentlyContinue'   # BITS 不需要 PS 进度条，�
 
 # ---------------- 工具函数 ----------------
 
+# 1.3.9 分步计时：Write-Step 是所有阶段的统一入口，在此记录各阶段耗时，
+# 结束时打印汇总表（诊断「首次制盘 20+ 分钟花在哪」；重跑时跳过的阶段自然计 0）
+$Script:StepTimings = [System.Collections.Generic.List[object]]::new()
+$Script:StepWatch   = [System.Diagnostics.Stopwatch]::StartNew()
+
 function Write-Step([string]$msg) {
+    if ($Script:StepTimings.Count -gt 0) {
+        $prev = $Script:StepTimings[$Script:StepTimings.Count - 1]
+        $prev.elapsed = $Script:StepWatch.Elapsed.ToString('mm\:ss')
+    }
+    $Script:StepTimings.Add([pscustomobject]@{ label = $msg; elapsed = '' })
+    $Script:StepWatch.Restart()
     Write-Host ""
     Write-Host "==> $msg" -ForegroundColor Cyan
+}
+
+function Show-StepTimingSummary {
+    if ($Script:StepTimings.Count -gt 0) {
+        $Script:StepTimings[$Script:StepTimings.Count - 1].elapsed = $Script:StepWatch.Elapsed.ToString('mm\:ss')
+    }
+    Write-Host ''
+    Write-Host '=== 各阶段耗时 ===' -ForegroundColor Cyan
+    foreach ($t in $Script:StepTimings) {
+        if ($t.elapsed) { Write-Host ("  {0,-6}  {1}" -f $t.elapsed, $t.label) }
+    }
 }
 function Write-Ok([string]$msg)   { Write-Host "    [OK] $msg" -ForegroundColor Green }
 function Write-Warn([string]$msg) { Write-Host "    [警告] $msg" -ForegroundColor Yellow }
@@ -82,6 +104,7 @@ function Write-Fail([string]$msg) { Write-Host "" ; Write-Host "[失败] $msg" -
 function Die([string]$msg, [string]$advice) {
     Write-Fail $msg
     if ($advice) { Write-Host "建议: $advice" -ForegroundColor Yellow }
+    Show-StepTimingSummary   # 1.3.9：失败退出也给出耗时表，便于定位卡在哪个阶段
     Write-Host ""
     Read-Host '按回车键退出'
     exit 1
@@ -211,7 +234,9 @@ function Copy-TreeWithRecovery([string]$Source, [string]$Dest, [string]$Label) {
     $prevProgress = $ProgressPreference
     $ProgressPreference = 'Continue'
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $p = Start-Process -FilePath robocopy.exe -ArgumentList @("`"$Source`"", "`"$Dest`"", '/E', '/NJH', '/NJS', '/NDL', '/R:1', '/W:1') -PassThru -WindowStyle Hidden
+    # 1.3.9：加 /MT:8 并发写（上万小文件进 exFAT 的吞吐瓶颈）。/MT 不影响正确性——
+    # 退出码语义不变，拷后仍有 Assert-TreeSynced 三重对账 + 三振/掉盘恢复兜底
+    $p = Start-Process -FilePath robocopy.exe -ArgumentList @("`"$Source`"", "`"$Dest`"", '/E', '/MT:8', '/NJH', '/NJS', '/NDL', '/R:1', '/W:1') -PassThru -WindowStyle Hidden
     try {
         while (-not $p.HasExited) {
             $done = @(Get-ChildItem -LiteralPath $Dest -Recurse -File -ErrorAction SilentlyContinue).Count
@@ -1338,6 +1363,7 @@ if ($piInstalledFinal -and -not (Test-Path (Join-Path $Script:UsbRoot 'bin\pi\no
 # ---------------- 11. 完成 ----------------
 # 1.3.7：清一次性解压暂存；下载缓存保留（下次/换盘重跑免重新下载，30 天未用自动清理）
 Remove-Item -LiteralPath $Script:ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+Show-StepTimingSummary
 Write-Host ""
 Write-Host '===============================================' -ForegroundColor Green
 Write-Host '  制作完成，可以拔下使用了！' -ForegroundColor Green
