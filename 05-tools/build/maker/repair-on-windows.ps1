@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.4.4  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.4.5  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -21,7 +21,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.4.4'
+$Script:ScriptVersion   = '0.4.5'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -537,11 +537,30 @@ function Start-NodeAgentSession([string]$Name) {
     New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
     if ($Name -eq 'openclaw') {
         # 0.4.4：状态必须放本机 NTFS（%TEMP%\ai-repair\openclaw，退出随 TempRoot 统一清理）——
-        # OpenClaw 用 SQLite 存状态，exFAT 不支持其锁机制，写 U盘直接 EIO；模型接入靠
-        # ANTHROPIC_BASE_URL/AUTH_TOKEN 环境变量（0.4.3：CONFIG_DIR 是无效变量，勿用）
+        # OpenClaw 用 SQLite 存状态，exFAT 不支持其锁机制，写 U盘直接 EIO
+        # （0.4.3：CONFIG_DIR 是无效变量，勿用）
         $stateDir = Join-Path $Script:TempRoot 'openclaw'
         $env:OPENCLAW_STATE_DIR = $stateDir
         $env:OPENCLAW_CONFIG_PATH = (Join-Path $stateDir 'openclaw.json')
+        # 0.4.5：环境变量只改请求端点，不会注册 provider——/model 一度显示
+        # “No models available”（默认 defaultProvider=openai 也因此报 auth failed）。
+        # 必须在 openclaw.json 写 models.providers 才有模型可选（schema 实证自
+        # openclaw dist config-provider-contract：baseUrl/apiKey/api 键名，
+        # apiKey 支持 "${ENV}" 引用——token 不落盘；config 随 TempRoot 退出清理）
+        $env:TOKENEFF_OC_KEY = $token
+        New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+        $oc = @{
+            models = @{ providers = @{ tokeneff = @{
+                baseUrl = 'https://tokeneff.com'
+                api     = 'anthropic-messages'
+                apiKey  = '${TOKENEFF_OC_KEY}'
+                models  = @(@{ id = 'glm-5.2'; name = 'GLM 5.2'; reasoning = $false; input = @('text')
+                               cost = @{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                               contextWindow = 128000; maxTokens = 8192 }) } } }
+            agents = @{ defaults = @{ model = @{ primary = 'tokeneff/glm-5.2' } } }
+        }
+        [IO.File]::WriteAllText((Join-Path $stateDir 'openclaw.json'),
+            ($oc | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
     }
     else {
         # Pi 0.73.1 只认 PI_CODING_AGENT_DIR（PI_CONFIG_DIR/PI_HOME 是无效变量——曾致 Pi 把配置写到
