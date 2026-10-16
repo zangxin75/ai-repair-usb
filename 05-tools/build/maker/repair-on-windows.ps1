@@ -512,7 +512,9 @@ function Start-NodeAgentSession([string]$Name) {
         Read-Host '按回车键返回' | Out-Null
         return
     }
+    # settings.conf 的 AUTH_TOKEN 允许缺失（老盘手工补的骨架无此键），回退读 auth_token 文件
     $token = $Script:Conf['AUTH_TOKEN']
+    if ([string]::IsNullOrWhiteSpace($token)) { $token = Read-AuthToken }
     if ([string]::IsNullOrWhiteSpace($token)) {
         Write-Warn '未获取到凭证（auth_token），无法启动。请先经「查询余额 / 管理账号」完成激活。'
         Read-Host '按回车键返回' | Out-Null
