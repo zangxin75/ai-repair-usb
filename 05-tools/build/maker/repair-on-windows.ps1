@@ -485,7 +485,8 @@ function Start-CodexSession() {
         $env:PATH = "$binDir;$env:PATH"
     }
     Write-Step '启动 Codex CLI 会话（退出会话后返回本菜单）'
-    & $codexExe
+    # --no-daemon：npm 装的 codex.exe 无完整本地包，后台 daemon 模式直接报错
+    & $codexExe --no-daemon
     Write-Host ''
     Write-Ok '会话已结束，按回车返回'
     Read-Host | Out-Null
