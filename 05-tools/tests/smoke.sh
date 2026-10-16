@@ -274,9 +274,9 @@ grep -q '\$ProgressPreference = \$prevProgress' "$MAKER/usb-v1.0.ps1" || { S75=0
 
 # 检查 7-6：掉盘鲁棒性 1.3.9（缓存保留 / 两段式 / 恢复 / 对账 / 原子写 / 文案）
 S76=1
-# 1.3.9 拷贝旗标变更：树拷贝恢复 /MT:8（上万小文件进 exFAT 的吞吐瓶颈；拷后仍有
-# Assert-TreeSynced 三重对账 + 三振/掉盘恢复兜底，正确性不受影响）。仍禁 /Z。
-grep -q '/MT:8' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 树拷贝缺 robocopy /MT:8"; }
+# 拷贝旗标：ps1 无 /Z 无 /MT:（掉盘方案 v1.2 负载整形——K1b 实测并发写放大 flaky
+# flash 掉盘（disk 51），单线程顺序拷对劣质闪存最友好；提速不得走并发写盘路线）
+grep -q '/MT:' "$MAKER/usb-v1.0.ps1" && { S76=0; bad "ps1 仍有 robocopy /MT:"; }
 grep -q 'robocopy.*/Z[^a-zA-Z]' "$MAKER/usb-v1.0.ps1" && { S76=0; bad "ps1 出现 robocopy /Z"; }
 # ps1 掉盘判定：robocopy 退出码 ≥8 + Test-Path 盘符检测 + 恢复函数 + 三振 Die
 grep -q '\-ge 8' "$MAKER/usb-v1.0.ps1" || { S76=0; bad "ps1 缺 robocopy ≥8 失败判定"; }

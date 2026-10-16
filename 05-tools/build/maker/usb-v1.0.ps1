@@ -234,9 +234,9 @@ function Copy-TreeWithRecovery([string]$Source, [string]$Dest, [string]$Label) {
     $prevProgress = $ProgressPreference
     $ProgressPreference = 'Continue'
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    # 1.3.9：加 /MT:8 并发写（上万小文件进 exFAT 的吞吐瓶颈）。/MT 不影响正确性——
-    # 退出码语义不变，拷后仍有 Assert-TreeSynced 三重对账 + 三振/掉盘恢复兜底
-    $p = Start-Process -FilePath robocopy.exe -ArgumentList @("`"$Source`"", "`"$Dest`"", '/E', '/MT:8', '/NJH', '/NJS', '/NDL', '/R:1', '/W:1') -PassThru -WindowStyle Hidden
+    # 禁 /MT（掉盘方案 v1.2 负载整形定稿）：K1b 实测闪存在并发写负载下报 disk 51 掉线，
+    # 对账/三振只能兜恢复不能降低触发概率；提速走「下载/解压与单线程写盘流水线化」路线
+    $p = Start-Process -FilePath robocopy.exe -ArgumentList @("`"$Source`"", "`"$Dest`"", '/E', '/NJH', '/NJS', '/NDL', '/R:1', '/W:1') -PassThru -WindowStyle Hidden
     try {
         while (-not $p.HasExited) {
             $done = @(Get-ChildItem -LiteralPath $Dest -Recurse -File -ErrorAction SilentlyContinue).Count
