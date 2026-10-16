@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.5.2  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.5.3  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -23,7 +23,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.5.2'
+$Script:ScriptVersion   = '0.5.3'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -672,7 +672,10 @@ function Start-ClaudeSession([string]$Mode) {
         }
     } elseif ($Mode -eq 'code') {
         # 编码模式（0.5.2）：主力编码用 Claude（重编码/工程级任务），无需提权
-        Write-Step '启动编码会话（软件开发 / 脚本编写，退出会话后返回本菜单）'
+        # 0.5.3：编码场景授予完全控制（跳过权限确认，工程级连续作业不被打断）
+        Write-Step '启动编码会话（软件开发 / 脚本编写，完全控制权限，退出会话后返回本菜单）'
+        Write-Host '    [权限] 已授完全控制（--dangerously-skip-permissions）：文件读写/命令执行不再逐条确认' -ForegroundColor Yellow
+        $claudeArgs += '--dangerously-skip-permissions'
     } else {
         Write-Step '启动维修会话（退出会话后返回本菜单）'
     }
