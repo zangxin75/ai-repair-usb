@@ -745,6 +745,14 @@ AI 电脑维修 U盘 配置目录
 - auth_token: 首次使用时由维修助手引导您创建，存放网关访问凭证
 - 请勿手动删除本目录
 EOF
+cat > "$MNT/config/settings.conf" <<'EOF'
+RECORD_MODE=customer
+GATEWAY_BASE_URL=https://tokeneff.com
+ACTIVATE_URL=https://tokeneff.com/api/usb/activate
+BALANCE_URL=https://tokeneff.com/api/usb/balance
+PROMO_CODE=
+CONFIG_OVERRIDE=1
+EOF
 
 # ---------------- 8.5 制作时签发 USB token（可选，可跳过；幂等） ----------------
 # 邮箱验证 → 签发 token → 写 config/auth_token；失败不阻塞制作（开机后 welcome.sh 会再引导配置）

@@ -1053,6 +1053,15 @@ AI 电脑维修 U盘 配置目录
 - auth_token: 首次使用时由维修助手引导您创建，存放网关访问凭证
 - 请勿手动删除本目录
 "@
+# 5.1 settings.conf（Windows 启动器硬依赖 ACTIVATE_URL/BALANCE_URL；bash 与 PS 逐行解析双兼容格式）
+Set-Content -Path (Join-Path $Script:UsbRoot 'config\settings.conf') -Encoding ascii -Value @"
+RECORD_MODE=customer
+GATEWAY_BASE_URL=https://tokeneff.com
+ACTIVATE_URL=https://tokeneff.com/api/usb/activate
+BALANCE_URL=https://tokeneff.com/api/usb/balance
+PROMO_CODE=
+CONFIG_OVERRIDE=1
+"@
 
 # 场景③ Windows 在线维修双击入口（repair-on-windows.bat/.ps1，与制作脚本同源同目录；
 # WebClient 二进制下载，避免 Set-Content 给 bat 写入 BOM 导致 @echo off 失效）
@@ -1061,7 +1070,13 @@ foreach ($f in @('repair-on-windows.bat', 'repair-on-windows.ps1', 'AI-Workstati
     try {
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add('User-Agent', "ai-repair-usb-maker/$Script:ScriptVersion")
-        $wc.DownloadFile('https://usb.tokeneff.com/maker/' + $f, (Join-Path $Script:UsbRoot $f))
+        $dst = Join-Path $Script:UsbRoot $f
+        $wc.DownloadFile('https://usb.tokeneff.com/maker/' + $f, $dst)
+        # ps1 须带 UTF-8 BOM（PS 5.1 无 BOM 按 GBK 读中文串会炸语法）；线上已带 BOM，此处补写双保险
+        if ($f -like '*.ps1') {
+            $txt = [IO.File]::ReadAllText($dst, [Text.Encoding]::UTF8)
+            [IO.File]::WriteAllText($dst, $txt, [Text.UTF8Encoding]::new($true))
+        }
         Write-Ok "已放入 Windows 在线维修入口: $f"
     } catch {
         Write-Warn "$f 下载失败（Windows 在线维修入口缺失，不影响 U盘 启动维修）。网络恢复后重新制作即可补上。"

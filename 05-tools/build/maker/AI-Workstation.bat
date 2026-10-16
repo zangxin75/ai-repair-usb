@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 REM =====================================================================
 REM repair-on-windows.bat - AI 电脑维修U盘 · 场景③ Windows 在线维修 双击入口
 REM 创建日期: 2026-10-13  版本: 0.3.0（P-A A2）
@@ -10,8 +11,7 @@ REM 提示: 本文件须与 repair-on-windows.ps1 一起放在U盘数据分区�
 REM       本文件与 AI-Workstation.bat 内容完全一致（双入口命名，设计 §9-3）
 REM =====================================================================
 
-REM 控制台切换 UTF-8 代码页（中文输出）
-chcp 65001 >nul
+REM 控制台切换 UTF-8 代码页（已提前至首行生效）
 
 REM 直接调用 ps1（-File 保证 $PSScriptRoot 定位U盘根，R5；提权由 ps1 模式菜单按需触发）
 title AI 电脑维修U盘 - Windows 在线维修
