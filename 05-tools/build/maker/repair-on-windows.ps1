@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.4.6  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.4.7  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -21,7 +21,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.4.6'
+$Script:ScriptVersion   = '0.4.7'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -499,7 +499,7 @@ function Start-CodexSession() {
     Read-Host | Out-Null
 }
 
-function Start-NodeAgentSession([string]$Name) {
+function Start-NodeAgentSession([string]$Name, [string]$PersonaFile = '') {
     # P-B §3.3-3.5：OpenClaw / Pi 共用便携 Node 直启（不经 npm run——exFAT 无 .bin 符号链接）
     # $Name = 'openclaw' | 'pi'
     $nodeExe = Join-Path $Script:UsbRoot 'bin\node\node.exe'
@@ -514,6 +514,7 @@ function Start-NodeAgentSession([string]$Name) {
     } else {
         $entry = Join-Path $Script:UsbRoot 'bin\pi\node_modules\@mariozechner\pi-coding-agent\dist\cli.js'
         $title = 'Pi 编码 agent'
+        if ($PersonaFile) { $title = 'Pi 办公助手' }
     }
     if (-not (Test-Path $entry)) {
         Write-Warn "入口缺失（$entry）。重跑制作命令可补装。"
@@ -593,7 +594,16 @@ function Start-NodeAgentSession([string]$Name) {
     }
     Write-Step "启动 $title 会话（退出会话后返回本菜单）"
     $entryArgs = @(); if ($Name -eq 'openclaw') { $entryArgs = @('chat') }
+    # 0.4.7：Pi 人格注入 —— Pi 无 --system-prompt 参数（CLI 实证），靠 cwd 的
+    # AGENTS.md 发现机制（--no-context-files 可关，默认开）。人格文件临时拷到
+    # U盘根（cwd），会话结束即删；只在启动前一刻拷、早退路径不会遗留。
+    $agentsMd = $null
+    if ($Name -eq 'pi' -and $PersonaFile -and (Test-Path $PersonaFile)) {
+        $agentsMd = Join-Path $Script:UsbRoot 'AGENTS.md'
+        Copy-Item $PersonaFile $agentsMd -Force
+    }
     & $nodeExe $entry @entryArgs
+    if ($agentsMd -and (Test-Path $agentsMd)) { Remove-Item $agentsMd -Force }
     Write-Host ''
     Write-Ok '会话已结束，按回车返回'
     Read-Host | Out-Null
@@ -755,8 +765,8 @@ while ($true) {
     else {
         Write-Host ""
         Write-Host "---------------- 模式菜单 ----------------" -ForegroundColor Cyan
-        Write-Host "  [1] 维修模式（需管理员权限，处理系统级问题）"
-        Write-Host "  [2] 办公助手模式（无需提权，写文档/表格/文案）"
+        Write-Host "  [1] 维修模式（Claude · 需管理员权限，处理系统级问题）"
+        Write-Host "  [2] 办公助手模式（推荐 Pi · 无需提权，写文档/表格/文案$(if (-not ($Script:PiInstalled -and (Test-Path (Join-Path $Script:UsbRoot 'bin\node\node.exe')))) { '；未装 Pi，本次用 Claude' })）"
         Write-Host "  [3] 查询余额 / 管理账号"
         if ($Script:CodexInstalled) {
             Write-Host "  [4] Codex CLI（命令行 AI 助手，OpenAI 风格）"
@@ -769,7 +779,7 @@ while ($true) {
             Write-Host "  [5] OpenClaw（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
         }
         if ($Script:PiInstalled) {
-            Write-Host "  [6] Pi（轻量编码 agent）$(if (-not $Script:NodeInstalled) { '（Node 运行时缺失，重跑制作命令可补装）' })"
+            Write-Host "  [6] Pi（办公助理 / 轻量编码）$(if (-not $Script:NodeInstalled) { '（Node 运行时缺失，重跑制作命令可补装）' })"
         } elseif ($Script:PiDeclined) {
             Write-Host "  [6] Pi（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
         }
@@ -837,7 +847,13 @@ while ($true) {
                 Show-UpgradeHint
             } else {
                 if ($lowBalance) { Write-Warn "本周额度已不足 10%（剩余 $remaining token），请合理安排使用。" }
-                Start-ClaudeSession -Mode 'office'
+                # 0.4.7 使用关系定稿：办公助理推荐 Pi（已装则直启，注入 office 人格），
+                # 未装回落 Claude；维修/编码仍以 Claude 为主力
+                if ($Script:PiInstalled -and (Test-Path (Join-Path $Script:UsbRoot 'bin\node\node.exe'))) {
+                    Start-NodeAgentSession -Name pi -PersonaFile (Join-Path $Script:ConfigDir 'office\CLAUDE.md')
+                } else {
+                    Start-ClaudeSession -Mode 'office'
+                }
             }
         }
         '3' {
