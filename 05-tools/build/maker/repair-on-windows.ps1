@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.5.1  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.5.2  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -23,7 +23,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.5.1'
+$Script:ScriptVersion   = '0.5.2'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -670,6 +670,9 @@ function Start-ClaudeSession([string]$Mode) {
         } else {
             Write-Warn "config\office\CLAUDE.md 缺失，将以通用模式启动（无人格注入）。"
         }
+    } elseif ($Mode -eq 'code') {
+        # 编码模式（0.5.2）：主力编码用 Claude（重编码/工程级任务），无需提权
+        Write-Step '启动编码会话（软件开发 / 脚本编写，退出会话后返回本菜单）'
     } else {
         Write-Step '启动维修会话（退出会话后返回本菜单）'
     }
@@ -913,6 +916,7 @@ while ($true) {
         } elseif ($Script:PiDeclined) {
             Write-Host "  [6] Pi（未安装，重跑制作命令可补装）" -ForegroundColor DarkGray
         }
+        Write-Host "  [7] 编码模式（Claude · 软件开发/脚本，无需提权；轻编码/办公推荐 [6] Pi）"
         Write-Host "  [0] 退出（清理本机临时文件）"
         $choice = (Read-Host '请输入编号').Trim()
     }
@@ -1017,7 +1021,17 @@ while ($true) {
             elseif ($Script:PiDeclined) { Write-Warn '此盘未安装 Pi（制作时未勾选）。重跑制作命令可补装。' }
             else { Write-Warn '输入无效。' }
         }
+        '7' {
+            # 0.5.2 编码模式：主力编码 Claude（重编码/工程级）；闸门同办公模式（用尽拦截，低余额提醒）
+            if ($exhausted) {
+                Write-Warn '本周免费额度已用完，无法进入编码会话。'
+                Show-UpgradeHint
+            } else {
+                if ($lowBalance) { Write-Warn "本周额度已不足 10%（剩余 $remaining token），请合理安排使用。" }
+                Start-ClaudeSession -Mode 'code'
+            }
+        }
         '0' { Invoke-ExitCleanup }
-        default { Write-Warn '输入无效，请输入 0-6 的编号。' }
+        default { Write-Warn '输入无效，请输入 0-7 的编号。' }
     }
 }
