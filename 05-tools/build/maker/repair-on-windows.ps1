@@ -1,4 +1,4 @@
-﻿# repair-on-windows.ps1 版本: 0.5.4  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.5.5  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
@@ -23,7 +23,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.5.4'
+$Script:ScriptVersion   = '0.5.5'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -502,6 +502,25 @@ function Start-CodexSession() {
     Read-Host | Out-Null
 }
 
+# ---------------- 0.7 残留 node 进程清理（0.5.5：SQLite 锁根治） ----------------
+function Stop-NodeAgentProcesses {
+    # 只杀命令行里带 U盘 openclaw/pi 路径的 node.exe（路径含盘符与 bin\node_modules，
+    # 不会误伤客户机自己的 node 进程）。找不到/杀不掉均静默——退出清理处有重试兜底。
+    $targets = @(
+        (Join-Path $Script:UsbRoot 'bin\openclaw\node_modules'),
+        (Join-Path $Script:UsbRoot 'bin\pi\node_modules')
+    )
+    foreach ($t in $targets) {
+        try {
+            Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction Stop |
+                Where-Object { $_.CommandLine -and $_.CommandLine.Contains($t) } |
+                ForEach-Object {
+                    try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch { }
+                }
+        } catch { }
+    }
+}
+
 function Start-NodeAgentSession([string]$Name, [string]$PersonaFile = '') {
     # P-B §3.3-3.5：OpenClaw / Pi 共用便携 Node 直启（不经 npm run——exFAT 无 .bin 符号链接）
     # $Name = 'openclaw' | 'pi'
@@ -606,6 +625,9 @@ function Start-NodeAgentSession([string]$Name, [string]$PersonaFile = '') {
         Copy-Item $PersonaFile $agentsMd -Force
     }
     & $nodeExe $entry @entryArgs
+    # 0.5.5：TUI 退出后其 worker/gateway 子进程可能仍存活并锁住临时 SQLite，
+    # 不杀掉会导致 %TEMP%\ai-repair\ 删除失败留痕（且妨碍下一次会话）
+    Stop-NodeAgentProcesses
     if ($agentsMd -and (Test-Path $agentsMd)) { Remove-Item $agentsMd -Force }
     Write-Host ''
     Write-Ok '会话已结束，按回车返回'
@@ -694,13 +716,21 @@ function Invoke-ExitCleanup() {
     $env:ANTHROPIC_AUTH_TOKEN = $null
     $env:ANTHROPIC_BASE_URL   = $null
     # 删除 %TEMP%\ai-repair\（含 claude 配置临时副本与临时 CLAUDE_CONFIG_DIR 下的会话历史，customer 语义）
+    # 0.5.5：先杀残留 node 进程再删；失败重试 3 次；结果如实上报（不再删一半还报"无残留"）
+    $tempRemoved = $true
     if (Test-Path $Script:TempRoot) {
-        try {
-            Remove-Item $Script:TempRoot -Recurse -Force -ErrorAction Stop
-            Write-Ok '已删除本机临时目录（%TEMP%\ai-repair\）'
-        } catch {
-            Write-Warn "临时目录删除失败（可能有文件被占用，重启后系统会自动清理 TEMP）: $($_.Exception.Message)"
+        $tempRemoved = $false
+        for ($i = 1; $i -le 3; $i++) {
+            try {
+                Remove-Item $Script:TempRoot -Recurse -Force -ErrorAction Stop
+                $tempRemoved = $true
+                break
+            } catch {
+                if ($i -lt 3) { Stop-NodeAgentProcesses; Start-Sleep -Seconds 2 }
+            }
         }
+        if ($tempRemoved) { Write-Ok '已删除本机临时目录（%TEMP%\ai-repair\）' }
+        else { Write-Warn "临时目录删除失败（文件被占用，已重试 3 次）。残留：$Script:TempRoot —— 请手动删除或重启电脑由系统清理 TEMP。" }
     }
     # enterprise 模式：本地记录/会话历史保留由收尾任务文本驱动，脚本不硬编码删除（方案功能 4 定稿）
     if ($Script:RecordMode -eq 'enterprise') {
@@ -713,7 +743,8 @@ function Invoke-ExitCleanup() {
             try { Remove-UsbAutoLaunch; Write-Ok '已移除本机「插入自动弹出」注册（无痕迹红线）' }
             catch { Write-Warn "「插入自动弹出」注册移除失败（需手动清理）: $($_.Exception.Message)" }
         }
-        Write-Ok '上门服务模式：本机无维修痕迹残留（会话历史随临时目录一并清理）'
+        if ($tempRemoved) { Write-Ok '上门服务模式：本机无维修痕迹残留（会话历史随临时目录一并清理）' }
+        else { Write-Warn '上门服务模式：临时目录仍有残留（见上方警告），请手动删除后再离开客户机。' }
     }
     Write-Host ''
     Write-Host '===============================================' -ForegroundColor Green
