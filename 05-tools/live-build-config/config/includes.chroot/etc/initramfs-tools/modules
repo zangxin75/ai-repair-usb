@@ -1,0 +1,9 @@
+# modules — 强制打入 initramfs 的内核模块（2026-10-17 Mac 直启实测补丁）
+#
+# 背景：Mac 双引导（grub loopback 直启 ISO）走 findiso= 在 exFAT 数据分区上
+# 定位 ISO；Debian 12 默认 initramfs（MODULES=most）不一定含 exfat 文件系统
+# 模块 → initramfs 读不了 Ventoy 数据分区 → "Gave up waiting for root device"
+# 掉入 busybox。显式列在此处保证打包。
+#
+# 每行一个模块，格式与 /etc/initramfs-tools/modules 一致。
+exfat
