@@ -1,6 +1,10 @@
-﻿# repair-on-windows.ps1 版本: 0.5.5  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
+﻿# repair-on-windows.ps1 版本: 0.5.6  (AI 电脑维修 U盘 · 场景③ Windows 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-10-13
+# 0.5.6（critic 审计修复）：POST 补 X-Requested-With（portal CSRF，配合服务端 /api/usb/* 豁免）；
+#        Pi/Claude 启动前清宿主机残留 ANTHROPIC_API_KEY/OAUTH_TOKEN（双凭证残留下脏 x-api-key 会
+#        打到网关，mock 实证）；Pi 钉死 --provider tokeneff --model glm-5.2；403 激活分支文案中性化
+#        并透出服务端 detail（后端 suspended 实际返 403 而非设计契约 423，detail 可精确定位）
 # 版本: 0.4.0（0.2.0 + 模式菜单先于提权：维修模式按需 UAC / 办公助手模式免提权 /
 #        Codex CLI 入口按 agents.json 显隐；多Agent工作站 P-A A2）
 # 0.4.0（P-B）：+OpenClaw / Pi 入口（便携 Node 运行时 + 自包含预装包，入口直启 node cli；状态目录重定向 U盘）
@@ -23,7 +27,7 @@ param(
 )
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '0.5.5'
+$Script:ScriptVersion   = '0.5.6'
 $Script:HttpTimeoutSec  = 30        # API 请求超时
 $Script:NetMaxRetry     = 3         # 网关请求总尝试次数（首次 + 重试 2 次，方案 5.3）
 $Script:InstallMaxRetry = 3         # claude 安装总尝试次数（首次 + 重试 2 次，间隔 10s）
@@ -207,7 +211,11 @@ function Invoke-GatewayApi([string]$Method, [string]$Url, [hashtable]$Body, [str
                 ErrorAction = 'Stop'
             }
             if ($Body) { $params.Body = ($Body | ConvertTo-Json); $params.ContentType = 'application/json' }
-            if ($AuthKey) { $params.Headers = @{ Authorization = "Bearer $AuthKey" } }   # 后端 /api/usb/* 校验 Bearer 前缀，裸 key 会 401
+            # X-Requested-With：portal CSRF 中间件对非豁免 POST 强制要求（缺则 403，
+            # 曾被误报为"伪造序列号"）。启动器非浏览器，必须显式带上。
+            $hdrs = @{ 'X-Requested-With' = 'XMLHttpRequest' }
+            if ($AuthKey) { $hdrs['Authorization'] = "Bearer $AuthKey" }   # 后端 /api/usb/* 校验 Bearer 前缀，裸 key 会 401
+            $params.Headers = $hdrs
             return Invoke-RestMethod @params
         } catch {
             $lastErr = $_
@@ -224,6 +232,16 @@ function Invoke-GatewayApi([string]$Method, [string]$Url, [hashtable]$Body, [str
 function Get-HttpStatusCode([System.Management.Automation.ErrorRecord]$Err) {
     if ($Err.Exception.Response) { return [int]$Err.Exception.Response.StatusCode }
     return 0
+}
+
+# 提取网关错误响应的业务 detail（PS 5.1 把非 2xx 响应体放进 ErrorDetails.Message；FastAPI 返回 {"detail": ...}）
+function Get-GatewayErrorDetail([System.Management.Automation.ErrorRecord]$Err) {
+    try {
+        $raw = $Err.ErrorDetails.Message
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        if ($raw.TrimStart().StartsWith('{')) { return [string]($raw | ConvertFrom-Json).detail }
+        return $raw
+    } catch { return $null }
 }
 
 # ---------------- 7. 激活流程（R10-R21：方案 5.5，幂等五分支中文提示） ----------------
@@ -266,7 +284,13 @@ function Invoke-Activation() {
         $code = Get-HttpStatusCode -Err $_
         switch ($code) {
             429 { Die '该网络今日激活次数已达上限（每 IP 每日限量）。' '请明日再试，或更换网络环境后重试。' }
-            403 { Die 'U盘序列号校验失败（可能为伪造序列号）。' '请通过官网 https://tokeneff.com/usb 重新制作U盘后使用。' }
+            # 403 可能是停用/风控/网关拒绝等多种服务端原因，不能断言"伪造序列号"；
+            # 设计契约 423=风控暂停，但后端 usb.py 实际对 suspended 返回 403——透出 detail 精确定位
+            403 {
+                $detail = Get-GatewayErrorDetail $_
+                if ($detail) { Die "激活请求被服务端拒绝：$detail" '请联系支持并提供上方的U盘序列号，勿自行重做U盘。' }
+                else { Die '激活请求被服务端拒绝（HTTP 403）。' '请联系支持并提供上方的U盘序列号，勿自行重做U盘。' }
+            }
             423 { Die '该U盘已被风控暂停使用。' '请联系客服提供U盘序列号以核实处理。' }
             409 {
                 # key 过期（12 个月）→ 走付费/续费通道（方案 5.4）
@@ -555,6 +579,12 @@ function Start-NodeAgentSession([string]$Name, [string]$PersonaFile = '') {
     # 环境注入：与 Claude 相同的两个网关变量（Anthropic 协议）；状态目录/npm 缓存重定向到 U盘（零残留 §3.3）
     $env:ANTHROPIC_BASE_URL = 'https://tokeneff.com'
     $env:ANTHROPIC_AUTH_TOKEN = $token   # 与 Claude 会话同源同款（仅 AUTH_TOKEN，避免个别 SDK 优先 API_KEY 走偏计费路径）
+    # 清掉宿主机残留的内置 anthropic 凭证：Pi 只认 ANTHROPIC_API_KEY/OAUTH_TOKEN 判定
+    # 内置 provider "已认证"，残留会让它无视 models.json 的 tokeneff provider，默认选
+    # anthropic/claude-opus-4-7 直连 api.anthropic.com（国内网络 3 次重试全超时 →
+    # "Request timed out"，网关日志零 Pi 流量实证）
+    $env:ANTHROPIC_API_KEY = $null
+    $env:ANTHROPIC_OAUTH_TOKEN = $null
     $env:npm_config_cache = Join-Path $Script:ConfigDir 'npm-cache'
     $stateDir = Join-Path $Script:ConfigDir $Name
     New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
@@ -615,7 +645,11 @@ function Start-NodeAgentSession([string]$Name, [string]$PersonaFile = '') {
         $env:PATH = "$binDir\node;$binDir;$env:PATH"
     }
     Write-Step "启动 $title 会话（退出会话后返回本菜单）"
-    $entryArgs = @(); if ($Name -eq 'openclaw') { $entryArgs = @('chat') }
+    $entryArgs = @()
+    if ($Name -eq 'openclaw') { $entryArgs = @('chat') }
+    # Pi 必须显式钉死 provider/model：不传时它按回退链选"首个已认证内置 provider"，
+    # 一旦宿主机残留 ANTHROPIC_API_KEY 就会直连 api.anthropic.com 超时（见上方环境清理注释）
+    elseif ($Name -eq 'pi') { $entryArgs = @('--provider', 'tokeneff', '--model', 'glm-5.2') }
     # 0.4.7：Pi 人格注入 —— Pi 无 --system-prompt 参数（CLI 实证），靠 cwd 的
     # AGENTS.md 发现机制（--no-context-files 可关，默认开）。人格文件临时拷到
     # U盘根（cwd），会话结束即删；只在启动前一刻拷、早退路径不会遗留。
@@ -649,6 +683,11 @@ function Start-ClaudeSession([string]$Mode) {
     } else { $Script:DefaultGatewayBase }
     $env:ANTHROPIC_BASE_URL = $gateway
     $env:ANTHROPIC_AUTH_TOKEN = $Script:AuthKey
+    # 清掉宿主机残留的内置 anthropic 凭证（同 Pi 路径）：Claude Code 在双凭证残留下会把
+    # x-api-key（残留脏 key）和 Authorization: Bearer（网关 key）一起发出去（本机 mock 实测），
+    # 网关解析顺序未定——赌错就 401。清掉后只发 Bearer，与 5.1「仅 AUTH_TOKEN」设计一致。
+    $env:ANTHROPIC_API_KEY = $null
+    $env:ANTHROPIC_OAUTH_TOKEN = $null
 
     Initialize-ClaudeConfigDir
 
@@ -715,6 +754,8 @@ function Invoke-ExitCleanup() {
     # 显式清除 key 环境变量示意（进程退出即消亡，双保险）
     $env:ANTHROPIC_AUTH_TOKEN = $null
     $env:ANTHROPIC_BASE_URL   = $null
+    $env:ANTHROPIC_API_KEY    = $null
+    $env:ANTHROPIC_OAUTH_TOKEN = $null
     # 删除 %TEMP%\ai-repair\（含 claude 配置临时副本与临时 CLAUDE_CONFIG_DIR 下的会话历史，customer 语义）
     # 0.5.5：先杀残留 node 进程再删；失败重试 3 次；结果如实上报（不再删一半还报"无残留"）
     $tempRemoved = $true
