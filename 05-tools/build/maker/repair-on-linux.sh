@@ -2,7 +2,7 @@
 # repair-on-linux.sh 版本: 0.1.0  (AI 电脑维修 U盘 · 场景③ Linux 在线维修启动器)
 # =====================================================================
 # 创建日期: 2026-11-20
-# 版本: 0.1.0（初版精简版：仅 Claude 引擎；激活/余额/邮箱验证对等 Windows 启动器 0.5.6）
+# 版本: 0.2.0（环境自审：不在本项目U盘上运行即指路——已挂载成品U盘给出确切命令、无U盘则给制作命令；交互 read 绑 /dev/tty。0.1.0 初版见 git history）
 # 状态: 定稿实现（设计三轮 critic 审计 6.5→7.5→8.5 ACCEPT，2026-11-20）
 # 作者: Claude Code + kt
 # 设计依据: 04-design/技术方案_AI电脑维修U盘_场景三Linux在线维修启动器_20261120.md
@@ -16,7 +16,7 @@
 set -u
 
 # ---------------- 全局常量 ----------------
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.2.0"
 SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 USB_ROOT="$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd -P)"
 CONFIG_DIR="$USB_ROOT/config"
@@ -32,7 +32,14 @@ step() { printf '\n\033[36m==> %s\033[0m\n' "$1"; }
 ok()   { printf '    \033[32m[OK] %s\033[0m\n' "$1"; }
 warn() { printf '    \033[33m[警告] %s\033[0m\n' "$1"; }
 fail() { printf '\n\033[31m[失败] %s\033[0m\n' "$1"; }
-pause() { local _=''; printf '按回车键继续... '; IFS= read -r _ || true; printf '\n'; }
+ask() {  # 交互读取：stdin 是终端（正常U盘运行）直读；非终端且 /dev/tty 可用（curl|bash 单跑，
+    # stdin 是脚本管道，裸 read 会吞脚本行）绑终端；其余（测试管道喂答案 / AI_REPAIR_ASK_STDIN=1）回落 stdin
+    if [ "${AI_REPAIR_ASK_STDIN:-0}" != 1 ] && [ ! -t 0 ] && builtin read "$@" < /dev/tty 2>/dev/null; then
+        return 0
+    fi
+    builtin read "$@"
+}
+pause() { local _=''; printf '按回车键继续... '; ask -r _ || true; printf '\n'; }
 die() {
     fail "$1"
     [ -n "${2:-}" ] && printf '\033[33m建议: %s\033[0m\n' "$2"
@@ -56,6 +63,32 @@ esac
 # --repair 为 sudo 重入专用：非 root 持有即拒绝（防误用）
 if [ "$REPAIR_MODE" = 1 ] && [ "$(id -u)" -ne 0 ]; then
     fail '--repair 参数需要 root（由启动器自动使用，请勿手工传入）。'
+    exit 1
+fi
+
+# ---------------- 环境自审：贴错命令 / 装错场景自动纠偏 ----------------
+# 启动器只应在本项目U盘上运行；curl 单跑 / 拷去了普通U盘时在此指路，
+# 而不是在后面以「找不到 config/settings.conf」这种晦涩方式失败。
+audit_is_project_root() {   # $1=目录：任一成品U盘特征命中即真
+    [ -f "$1/config/settings.conf" ] && return 0
+    [ -d "$1/config" ] && return 0
+    [ -f "$1/repair-on-windows.ps1" ] && return 0
+    [ -f "$1/.ai-repair-maker-session" ] && return 0
+    return 1
+}
+if [ "$REPAIR_MODE" -eq 0 ] && ! audit_is_project_root "$USB_ROOT"; then
+    _found=""
+    for _root in ${AI_REPAIR_AUDIT_ROOTS:-/media/*/* /media/* /run/media/*/* /mnt/*}; do
+        if [ -d "$_root" ] && audit_is_project_root "$_root"; then _found="$_root"; break; fi
+    done
+    fail "启动器不在本项目的U盘上运行（当前位置: ${USB_ROOT}）。"
+    if [ -n "$_found" ]; then
+        printf '    检测到本项目的U盘已插入，开始维修请运行:\n        bash "%s/repair-on-linux.sh"\n' "$_found"
+    else
+        printf '    · 要【制作 / 升级U盘】:  curl -sL https://usb.tokeneff.com/maker/usb-v1.0.sh | sudo bash\n'
+        printf '    · 要【修这台电脑】: 请插入本项目的U盘，在其根目录运行:  bash repair-on-linux.sh\n'
+    fi
+    pause
     exit 1
 fi
 
@@ -295,11 +328,11 @@ do_activation() {
     printf '    机器指纹:   %s\n' "$fp"
     promo="${CONF[PROMO_CODE]:-}"
     if [ -n "$promo" ]; then
-        IFS= read -rp "推广码（直接回车使用默认值 $promo）: " input || input=""
+        IFS= ask -rp "推广码（直接回车使用默认值 $promo）: " input || input=""
         input="$(printf '%s' "$input" | tr -d '[:space:]')"
         [ -n "$input" ] && promo="$input"
     else
-        IFS= read -rp '推广码（可留空直接回车跳过）: ' input || input=""
+        IFS= ask -rp '推广码（可留空直接回车跳过）: ' input || input=""
         promo="$(printf '%s' "$input" | tr -d '[:space:]')"
     fi
     body="{\"usb_sn\":\"$(json_esc "$sn")\",\"machine_fp\":\"$(json_esc "$fp")\"\
@@ -394,7 +427,7 @@ email_verify() { # → 0=已验证 1=未完成（不阻断，调用方警告）
     step '本U盘用量已触发邮箱验证（免费额度辅助风控）'
     printf '    请输入您的邮箱收取验证码（验证一次后解除后续验证要求，限额不变）。\n'
     local email code verify_url
-    IFS= read -rp '邮箱地址: ' email || email=""
+    IFS= ask -rp '邮箱地址: ' email || email=""
     email="$(printf '%s' "$email" | tr -d '[:space:]')"
     [ -n "$email" ] || { warn '未输入邮箱，本次无法完成验证。'; return 1; }
     verify_url="${CONF[BALANCE_URL]%/balance}/verify"
@@ -417,7 +450,7 @@ email_verify() { # → 0=已验证 1=未完成（不阻断，调用方警告）
             warn "验证码发送失败（HTTP $GW_CODE）。"
             return 1 ;;
     esac
-    IFS= read -rp '请输入收到的 6 位验证码（直接回车放弃）: ' code || code=""
+    IFS= ask -rp '请输入收到的 6 位验证码（直接回车放弃）: ' code || code=""
     code="$(printf '%s' "$code" | tr -d '[:space:]')"
     [ -n "$code" ] || return 1
     if gw_curl POST "$verify_url/confirm" \
@@ -671,7 +704,7 @@ do_exit() {
     if [ "$RECORD_MODE" = "enterprise" ]; then
         printf '\n\033[33m[企业运维模式] 会话历史保留功能 Linux v0.1 未实现：\n本次会话历史位于 %s\n回车=随清理删除 / 输入 n=保留: \033[0m' "$WORK"
         local ans=''
-        IFS= read -r ans || ans=""
+        IFS= ask -r ans || ans=""
         case "${ans,,}" in
             n*) KEEP_WORK=1; printf '已选择保留（请自行记下上述路径）。\n' ;;
             *) WORK_CLEAN_CONFIRMED=1 ;;
@@ -693,7 +726,7 @@ while true; do
     printf '  [5] 余额查询 / 管理账号\n'
     printf '  [0] 退出（清理本机临时文件）\n'
     choice=''
-    IFS= read -rp '请输入编号: ' choice || choice=0
+    IFS= ask -rp '请输入编号: ' choice || choice=0
     case "$choice" in
         1) start_session readonly ;;
         2) run_repair_session ;;

@@ -1,7 +1,7 @@
-﻿# usb-v1.0.ps1 版本: 1.4.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+﻿# usb-v1.0.ps1 版本: 1.5.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.4.0（与 sh 同版发布；本端无功能变更。1.3.9：维修技能投放 config\claude-skills\（6 个 SKILL.md，与 Live ISO 内置同源））
+# 版本: 1.5.0（与 sh 同版：环境自审——检测到已制作U盘时告知「修电脑 vs 升级」正确入口并可退出指路。本端其余无变更）
 # 1.3.7（1.3.7：掉盘鲁棒性——两段式落盘（本机暂存→对账拷贝）、下载缓存保留（换盘重跑免重下）、
 #       掉盘检测+nonce 重定位恢复+三振退出、组件落盘三对账、agents.json 原子写、断盘哨兵改走恢复路径）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
@@ -24,7 +24,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.4.0'
+$Script:ScriptVersion   = '1.5.0'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -524,6 +524,37 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 0
 }
 Write-Ok '已获得管理员权限'
+
+# ---------------- 1.5 环境自审：贴错命令 / 装错场景自动纠偏 ----------------
+# 一键命令随处可见：已有成品U盘的用户常把制盘命令误当「修电脑」入口。检测到成品U盘
+# 在场时先告知两种意图的正确入口，用户确认后再继续制作器（升级/重做）。
+$madeUsbRoots = @()
+try {
+    $madeUsbRoots = @(
+        Get-Volume -ErrorAction SilentlyContinue |
+            Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } |
+            ForEach-Object {
+                $r = "{0}:\" -f $_.DriveLetter
+                if ((Test-Path -LiteralPath (Join-Path $r 'repair-on-windows.ps1')) -or
+                    (Test-Path -LiteralPath (Join-Path $r 'repair-on-linux.sh')) -or
+                    (Test-Path -LiteralPath (Join-Path $r '.ai-repair-maker-session'))) { $r }
+            }
+    )
+} catch { }
+if ($madeUsbRoots.Count -gt 0) {
+    Write-Warn '检测到已制作的本项目U盘：'
+    foreach ($r in $madeUsbRoots) { Write-Host "      · $r" }
+    Write-Host '    · 要【修电脑】→ 不要用制作器：双击U盘里的 repair-on-windows.bat（或右键 repair-on-windows.ps1「使用 PowerShell 运行」）'
+    Write-Host '    · 要【升级/重做U盘】→ 继续本次制作器（对已制作的盘自动无损升级，数据全保留）'
+    $auditAns = Read-Host '本次继续制作器？直接回车=继续 / 输入 n=退出并指路修电脑'
+    if ($auditAns -match '^(n|N)') {
+        $r0 = @($madeUsbRoots)[0]
+        Write-Host ''
+        Write-Host "要修电脑，请运行:  $r0\repair-on-windows.ps1" -ForegroundColor Green
+        Read-Host '按回车键退出'
+        exit 0
+    }
+}
 
 # ---------------- 2. 拉取组件清单 manifest.json ----------------
 Write-Step '正在获取组件清单 (manifest.json) ...'

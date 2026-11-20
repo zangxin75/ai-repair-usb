@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.4.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.5.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.4.0（场景③Linux：投放 repair-on-linux.sh 入口 + bin/claude-linux 便携引擎（.sha256 旁车）+
-#       写 maker_version + 完结提示；修复 1.2.x 起活 bug——多行 manifest 下 win32-x64 checksum 同行
-#       匹配恒空致便携 claude.exe 被静默跳过，改块内范围模式。1.3.9/1.3.7 见 git history）
+# 版本: 1.5.0（环境自审：贴错命令/装错场景自动纠偏——维修 Live 环境里贴制盘命令即拦截并指路、
+#       成品U盘在场时告知「修电脑 vs 升级」正确入口、非 Linux 系统指路 ps1/Mac；
+#       交互 read 全部改绑 /dev/tty，curl|sudo bash 一键命令下不再吞脚本行）
+# 1.4.0（场景③Linux 投放/引擎/checksum 活 bug）及更早见 git history
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
 #
@@ -24,7 +25,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="1.5.0"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -67,6 +68,53 @@ EOF
 # ---------------- 1. root 自检 ----------------
 [ "$(id -u)" -eq 0 ] || die "需要 root 权限。" "请使用: curl -sL https://usb.tokeneff.com/maker/usb-v1.0.sh | sudo bash"
 c_ok "已获得 root 权限"
+
+# ---------------- 1.5 环境自审：贴错命令 / 装错场景自动纠偏 ----------------
+# ask()：curl|sudo bash 下 stdin 是脚本管道，裸 read 会把下一行脚本当答案并吞掉；
+# bash 管道模式不设 fd255，exec 全局换栈有截断风险，故逐次交互按需绑定 /dev/tty。
+ask() {
+    if [ "${AI_REPAIR_ASK_STDIN:-0}" != 1 ] && [ ! -t 0 ] && builtin read "$@" < /dev/tty 2>/dev/null; then
+        return 0
+    fi
+    builtin read "$@"
+}
+[ "$(uname -s)" = "Linux" ] || die "此命令是 Linux 制作器，不能在 $(uname -s) 上运行。" \
+    "Windows 制盘: irm https://usb.tokeneff.com/maker/usb-v1.0.ps1 | iex（PowerShell）；Mac 无制盘端，请改用 Windows/Linux 电脑。"
+
+audit_find_usbs() {   # 列出已挂载的本项目U盘数据分区根（无则空输出）
+    local d p
+    for d in /media/*/* /media/* /run/media/*/* /mnt/*; do
+        [ -d "$d" ] || continue
+        for p in .ai-repair-maker-session repair-on-windows.ps1 repair-on-linux.sh; do
+            if [ -e "$d/$p" ]; then printf '%s\n' "$d"; break; fi
+        done
+    done | sort -u
+}
+LIVE_MARKER="${AI_REPAIR_LIVE_MARKER:-/usr/local/bin/welcome.sh}"
+AUDIT_USBS="$(audit_find_usbs || true)"
+if [ -f "$LIVE_MARKER" ] && [ "${AI_REPAIR_MAKER_FORCE:-0}" != "1" ]; then
+    c_fail "这里是「AI 维修 Live 系统」——本机是正在维修的电脑，不需要制作 U盘。"
+    printf '开始维修请运行 U盘 上的启动器:\n'
+    _u="$(printf '%s' "$AUDIT_USBS" | head -n1)"
+    if [ -n "$_u" ]; then
+        printf '    bash "%s/repair-on-linux.sh"\n' "$_u"
+    else
+        printf '    在文件管理器进入本项目的U盘，打开终端后运行: bash repair-on-linux.sh\n'
+    fi
+    printf '确需在此环境重做/升级 U盘（罕见）: 先下载本脚本，再 sudo AI_REPAIR_MAKER_FORCE=1 bash usb-v1.0.sh\n'
+    exit 0
+fi
+if [ -n "$AUDIT_USBS" ]; then
+    c_warn "检测到已制作的本项目U盘："
+    printf '%s\n' "$AUDIT_USBS" | sed 's/^/      · /'
+    printf '    · 要【修电脑】→ 不要用制作器：Linux 在U盘上运行 bash repair-on-linux.sh；Windows 双击U盘 repair-on-windows.bat\n'
+    printf '    · 要【升级/重做U盘】→ 继续本次制作器（对已制作的盘自动无损升级，数据全保留）\n'
+    _AUDIT_GO=""
+    ask -rp '本次继续制作器？(Y/n): ' _AUDIT_GO || true
+    case "${_AUDIT_GO:-}" in
+        n|N|no|NO) die "已退出制作器。" "修电脑请按上方提示运行U盘启动器；升级/重做请重新运行本命令并选 y。" ;;
+    esac
+fi
 
 # ---------------- 2. 依赖检查 ----------------
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "缺少依赖: $1" "请先安装: $2"; }
@@ -181,7 +229,7 @@ else
         i=$((i+1))
     done
     echo ""
-    read -rp "请输入要制作的 U盘 编号（1-${#CANDIDATES[@]}）: " SEL
+    ask -rp "请输入要制作的 U盘 编号（1-${#CANDIDATES[@]}）: " SEL
     [[ "$SEL" =~ ^[0-9]+$ ]] && [ "$SEL" -ge 1 ] && [ "$SEL" -le "${#CANDIDATES[@]}" ] \
         || die "输入的编号无效。" "请重新运行并输入列表中的编号。"
     TARGET_NAME="${CANDIDATES[$((SEL-1))]}"
@@ -214,7 +262,7 @@ printf '\033[31m  严重警告：制作过程将清空该 U盘 上的全部数�
 printf '\033[31m  目标: %s （约 %dGB）\033[0m\n' "$TARGET_DEV" "$SIZE_GB"
 printf '\033[31m  该操作不可恢复，请先备份 U盘 中的重要文件。\033[0m\n'
 printf '\033[31m!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\033[0m\n'
-read -rp "确认继续请输入大写 YES: " CONFIRM
+ask -rp "确认继续请输入大写 YES: " CONFIRM
 [ "$CONFIRM" = "YES" ] || { echo "已取消，未对 U盘 做任何修改。"; exit 0; }
 
 # ---------------- 5.5 Agent / Linux 镜像勾选（P-A A4）+ 容量动态复查 ----------------
@@ -281,32 +329,32 @@ if [ -n "$AGENTS_ARG" ]; then
     c_ok "已按 --agents 勾选: Claude=$( [ $WANT_CLAUDE = 1 ] && echo 装 || echo 不装 ) / Codex=$( [ $WANT_CODEX = 1 ] && echo 装 || echo 不装 ) / OpenClaw=$( [ $WANT_OPENCLAW = 1 ] && echo 装 || echo 不装 ) / Pi=$( [ $WANT_PI = 1 ] && echo 装 || echo 不装 ) / Node=$( [ $WANT_NODE = 1 ] && echo 装 || echo 不装 ) / Debian=$( [ $WANT_DEBIAN = 1 ] && echo 装 || echo 不装 )"
 else
     # 缺省逐项 y/n 问答；回车默认（claude 默认装，其余默认不装）
-    read -rp "安装便携 Claude Code（维修/办公 AI 引擎，约 236MB）？(Y/n): " R1
+    ask -rp "安装便携 Claude Code（维修/办公 AI 引擎，约 236MB）？(Y/n): " R1
     [ "${R1,,}" = "n" ] && WANT_CLAUDE=0 || WANT_CLAUDE=1
     WANT_CODEX=0
     if [ "$CODEX_AVAILABLE" = "1" ]; then
-        read -rp "安装 Codex CLI（OpenAI 风格命令行助手，约 334MB）？(y/N): " R2
+        ask -rp "安装 Codex CLI（OpenAI 风格命令行助手，约 334MB）？(y/N): " R2
         [ "${R2,,}" = "y" ] && WANT_CODEX=1
     fi
     WANT_OPENCLAW=0; WANT_PI=0; WANT_NODE=0
     if [ "$OC_AVAILABLE" = "1" ]; then
-        read -rp "安装 OpenClaw（个人 AI 助理，约 380MB，需 Node 运行时）？(y/N): " R4
+        ask -rp "安装 OpenClaw（个人 AI 助理，约 380MB，需 Node 运行时）？(y/N): " R4
         [ "${R4,,}" = "y" ] && WANT_OPENCLAW=1
     fi
     if [ "$PI_AVAILABLE" = "1" ]; then
-        read -rp "安装 Pi（轻量编码 agent，约 90MB，需 Node 运行时）？(y/N): " R5
+        ask -rp "安装 Pi（轻量编码 agent，约 90MB，需 Node 运行时）？(y/N): " R5
         [ "${R5,,}" = "y" ] && WANT_PI=1
     fi
     if [ "$WANT_OPENCLAW" = "1" ] || [ "$WANT_PI" = "1" ]; then
         if [ "$NODE_AVAILABLE" = "1" ]; then
-            read -rp "OpenClaw/Pi 需要 Node 运行时（约 110MB），一并安装？(Y/n): " RN
+            ask -rp "OpenClaw/Pi 需要 Node 运行时（约 110MB），一并安装？(Y/n): " RN
             case "${RN,,}" in n*) WANT_NODE=0 ;; *) WANT_NODE=1 ;; esac
         else
             c_warn "便携 Node 运行时不可用，OpenClaw/Pi 已取消勾选。"
             WANT_OPENCLAW=0; WANT_PI=0
         fi
     fi
-    read -rp "附带 Debian 12 netinst 安装镜像（约 650MB）？(y/N): " R3
+    ask -rp "附带 Debian 12 netinst 安装镜像（约 650MB）？(y/N): " R3
     [ "${R3,,}" = "y" ] && WANT_DEBIAN=1 || WANT_DEBIAN=0
 fi
 
@@ -324,7 +372,7 @@ if [ "$NEED_GB" -gt "$SIZE_GB" ]; then
     [ "$WANT_OPENCLAW" = "1" ] && echo "    - 取消 OpenClaw（省约 1GB）"
     [ "$WANT_PI" = "1" ] && echo "    - 取消 Pi（省约 1GB）"
     [ "$WANT_CODEX" = "1" ] && echo "    - 取消 Codex CLI（省约 1GB）"
-    read -rp "输入 C 继续（空间不足风险自负）/ 其他任意键退出: " RC
+    ask -rp "输入 C 继续（空间不足风险自负）/ 其他任意键退出: " RC
     [ "${RC^^}" = "C" ] || { echo "已取消，未对 U盘 做任何修改。"; exit 0; }
 fi
 
@@ -646,7 +694,7 @@ wait_usb_return() {
     [ -s "${CACHE}/session-nonce" ] && nonce="$(cat "${CACHE}/session-nonce")"
     local probe="${WORKDIR}/probe" part p
     while true; do
-        read -rp "插好 U盘 后按回车继续: " _ACK
+        ask -rp "插好 U盘 后按回车继续: " _ACK
         mkdir -p "$probe"
         # nonce 重定位：候选 = 所有 USB 磁盘的分区；逐个临时挂到 probe 点读 nonce，
         # 匹配者挂回同一 $MNT 路径（路径不变 → 后续代码零改动），其余立即卸载
@@ -814,28 +862,28 @@ AUTH_TOKEN_FILE="$MNT/config/auth_token"
 if [ -s "$AUTH_TOKEN_FILE" ]; then
     c_ok "检测到已有 AI 服务凭证（config/auth_token），跳过配置"
 else
-    read -rp "是否现在配置 AI 服务（免费，只需邮箱验证）？(y/N): " WANT_TOKEN
+    ask -rp "是否现在配置 AI 服务（免费，只需邮箱验证）？(y/N): " WANT_TOKEN
     if [ "${WANT_TOKEN,,}" = "y" ]; then
         TOKEN_DONE=0
         for attempt in 1 2 3; do   # 首次 + 最多 2 次重试
-            read -rp "请输入邮箱: " USB_EMAIL
+            ask -rp "请输入邮箱: " USB_EMAIL
             if [ -z "$USB_EMAIL" ]; then
                 c_warn "邮箱不能为空（第 ${attempt} 次尝试）"
             elif ! usb_portal_post '/activate/request-code' "{\"email\": \"$USB_EMAIL\"}" >/dev/null; then
                 c_warn "验证码发送失败，请检查网络（第 ${attempt} 次尝试）"
             else
                 c_ok "验证码已发送到邮箱（10 分钟内有效）"
-                read -rp "请输入邮箱收到的 6 位验证码: " USB_CODE
+                ask -rp "请输入邮箱收到的 6 位验证码: " USB_CODE
                 # v0.3.1：顺手设置登录密码 → 用户可凭邮箱+密码登录 tokeneff.com 查余额/管理 Key
                 USB_PWD=""
                 while [[ "$USB_CODE" =~ ^[0-9]{6}$ ]]; do
                     c_warn "提示：若该邮箱已注册过官网账号，此密码将同步修改其登录密码。"
-                    read -rsp "设置登录密码（≥8位，登录官网 tokeneff.com 查余额用，输入不回显，直接回车跳过）: " USB_PWD; echo
+                    ask -rsp "设置登录密码（≥8位，登录官网 tokeneff.com 查余额用，输入不回显，直接回车跳过）: " USB_PWD; echo
                     if [ -z "$USB_PWD" ]; then
                         c_warn "已跳过设置密码（将来无法登录官网查询余额）"
                         break
                     fi
-                    read -rsp "请再次输入密码: " USB_PWD2; echo
+                    ask -rsp "请再次输入密码: " USB_PWD2; echo
                     if [ "${#USB_PWD}" -lt 8 ]; then c_warn "密码至少 8 位"; continue; fi
                     if [ "$USB_PWD" != "$USB_PWD2" ]; then c_warn "两次输入不一致"; continue; fi
                     break
@@ -853,7 +901,7 @@ else
                 c_warn "验证码校验失败（第 ${attempt} 次尝试）"
             fi
             if [ "$attempt" -lt 3 ]; then
-                read -rp "是否重试？(Y/n): " TOKEN_RETRY
+                ask -rp "是否重试？(Y/n): " TOKEN_RETRY
                 [ "${TOKEN_RETRY,,}" = "n" ] && break
             fi
         done

@@ -56,6 +56,11 @@ printf '#!/bin/bash\nexit "${MOCK_SUDO_RC:-1}"\n'      > "$MOCK/sudo"
 printf '#!/bin/bash\nexit 0\n'                        > "$MOCK/sleep"
 printf '#!/bin/bash\necho SYSTEM_ENGINE_RAN\nexit 0\n' > "$MOCK/claude"
 chmod +x "$MOCK"/*
+# 交互读取回落 stdin（ask() 默认会绑 /dev/tty，会让管道喂答案失效）；
+# 审计扫描根隔离到空目录（真机恰好挂着本项目U盘时测试仍可复现）
+export AI_REPAIR_ASK_STDIN=1
+AUDIT_NONE="$(mktemp -d)"
+export AI_REPAIR_AUDIT_ROOTS="$AUDIT_NONE"
 
 # 假U盘搭建：mk_usb [RECORD_MODE] → 假U盘根目录；启动器副本 + settings.conf
 mk_usb() {
@@ -101,10 +106,17 @@ bash -n build/maker/usb-v1.0.sh && ok 'bash -n 制作器' || bad 'bash -n 制作
 h="$(PATH="$MOCK:$PATH" bash "$LAUNCHER" --help 2>&1)"; rc=$?
 [ $rc -eq 0 ] && assert_in "$h" '用法' '--help 退出码 0 + 用法' || bad '--help 退出码非 0'
 
-echo '== 2. 前置拒绝 =='
+echo '== 2. 前置拒绝 + 环境自审 =='
 BARE="$(mktemp -d)"; cp "$LAUNCHER" "$BARE/repair-on-linux.sh"
 out="$(run_l "$BARE" '\n\n')"; rc=$?
-assert_in "$out" '未在脚本所在目录找到' 'S2 无 settings.conf 拒跑'
+[ $rc -ne 0 ] && assert_in "$out" '启动器不在本项目的U盘上运行' 'S2a 裸跑拦截（curl 单跑场景）' || bad 'S2a 裸跑应退出非 0'
+assert_in "$out" 'usb-v1.0.sh | sudo bash' 'S2b 裸跑指路制作命令'
+USB2="$(mk_usb)"
+AI_REPAIR_AUDIT_ROOTS="$USB2" out="$(run_l "$BARE" '\n\n')"; rc=$?
+[ $rc -ne 0 ] && assert_in "$out" "bash \"$USB2/repair-on-linux.sh\"" 'S2c 已插U盘时给出确切启动命令' || bad 'S2c 已插U盘应退出非 0 并指路'
+BARE2="$(mktemp -d)"; cp "$LAUNCHER" "$BARE2/repair-on-linux.sh"; touch "$BARE2/repair-on-windows.ps1"
+out="$(run_l "$BARE2" '\n\n')"; rc=$?
+[ $rc -ne 0 ] && assert_in "$out" '未在脚本所在目录找到' 'S2d 审计放行后无 settings.conf 兜底拒跑' || bad 'S2d 兜底应退出非 0'
 U="$(mk_usb)"; grep -v '^ACTIVATE_URL=' "$U/config/settings.conf" > "$U/config/settings.conf.tmp" && mv "$U/config/settings.conf.tmp" "$U/config/settings.conf"
 out="$(run_l "$U" '\n\n')"
 assert_in "$out" '缺少必需配置项 ACTIVATE_URL' 'S3 settings.conf 缺必需项拒绝'
