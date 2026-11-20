@@ -1,7 +1,8 @@
-﻿# usb-v1.0.ps1 版本: 1.5.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+﻿# usb-v1.0.ps1 版本: 1.6.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.5.0（与 sh 同版：环境自审——检测到已制作U盘时告知「修电脑 vs 升级」正确入口并可退出指路。本端其余无变更）
+# 版本: 1.6.0（与 sh 同版：升级直达——检测到成品U盘时三选一菜单默认「无损升级」，升级模式
+#       跳过选盘/清盘确认/Win镜像/组件勾选问答，按盘上现状增量更新；settings.conf 存在即保留不覆盖）
 # 1.3.7（1.3.7：掉盘鲁棒性——两段式落盘（本机暂存→对账拷贝）、下载缓存保留（换盘重跑免重下）、
 #       掉盘检测+nonce 重定位恢复+三振退出、组件落盘三对账、agents.json 原子写、断盘哨兵改走恢复路径）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见下方 TODO(K0)）
@@ -24,7 +25,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.5.0'
+$Script:ScriptVersion   = '1.6.0'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -541,18 +542,46 @@ try {
             }
     )
 } catch { }
+$upgradeMode = $false; $upgradeRoot = $null
 if ($madeUsbRoots.Count -gt 0) {
     Write-Warn '检测到已制作的本项目U盘：'
     foreach ($r in $madeUsbRoots) { Write-Host "      · $r" }
-    Write-Host '    · 要【修电脑】→ 不要用制作器：双击U盘里的 repair-on-windows.bat（或右键 repair-on-windows.ps1「使用 PowerShell 运行」）'
-    Write-Host '    · 要【升级/重做U盘】→ 继续本次制作器（对已制作的盘自动无损升级，数据全保留）'
-    $auditAns = Read-Host '本次继续制作器？直接回车=继续 / 输入 n=退出并指路修电脑'
-    if ($auditAns -match '^(n|N)') {
-        $r0 = @($madeUsbRoots)[0]
-        Write-Host ''
-        Write-Host "要修电脑，请运行:  $r0\repair-on-windows.ps1" -ForegroundColor Green
-        Read-Host '按回车键退出'
-        exit 0
+    Write-Host ''
+    Write-Host '  接下来想做什么？'
+    Write-Host '    [1] 无损升级（推荐）—— 更新脚本/AI引擎/维修系统/Ventoy引导；凭证、配置、盘中文件全保留'
+    Write-Host '    [2] 重新制作 —— 清空重做（走完整流程，含 Windows 镜像与各组件重新勾选）'
+    Write-Host '    [3] 退出 —— 我其实是想修电脑（双击U盘里的 repair-on-windows.bat）'
+    $auditAns = (Read-Host '请选择（直接回车 = 1 无损升级）').Trim()
+    if ([string]::IsNullOrWhiteSpace($auditAns)) { $auditAns = '1' }
+    switch ($auditAns) {
+        '1' {
+            $upgradeMode = $true
+            if (@($madeUsbRoots).Count -gt 1) {
+                for ($k = 0; $k -lt $madeUsbRoots.Count; $k++) { Write-Host ("      [{0}] {1}" -f ($k + 1), $madeUsbRoots[$k]) }
+                $sel = (Read-Host "要升级哪一只？（输入编号 1-$($madeUsbRoots.Count)）").Trim()
+                $selNum = 0
+                if (-not [int]::TryParse($sel, [ref]$selNum) -or $selNum -lt 1 -or $selNum -gt $madeUsbRoots.Count) {
+                    Die '输入的编号无效。' '请重新运行本脚本并输入列表中的数字编号。'
+                }
+                $upgradeRoot = "$($madeUsbRoots[$selNum - 1])"
+            } else {
+                $upgradeRoot = "$(@($madeUsbRoots)[0])"
+            }
+            Write-Ok "进入无损升级模式（目标: $upgradeRoot）——盘中文件、凭证、配置全保留"
+        }
+        '2' {
+            Write-Ok '进入重新制作流程（U盘将被清空，请注意备份）'
+        }
+        '3' {
+            $r0 = @($madeUsbRoots)[0]
+            Write-Host ''
+            Write-Host "要修电脑，请运行:  $r0\repair-on-windows.ps1" -ForegroundColor Green
+            Read-Host '按回车键退出'
+            exit 0
+        }
+        default {
+            Die "无效选择: $auditAns（可选 1/2/3）。" '请重新运行本脚本。'
+        }
     }
 }
 
@@ -594,6 +623,20 @@ foreach ($d in ($usbDisks | Where-Object { $_.Size -lt ($Script:MinBaseGB * 1GB)
 Write-Host ""
 if ($candidates.Count -eq 0) {
     Die "所有 USB 磁盘容量均不足 $Script:MinBaseGB GB。" "请更换容量 ≥${Script:MinBaseGB}GB（推荐 128GB）的 U盘 后重新运行；若还要装 Windows 镜像/多个 Agent，容量越大越好。"
+} elseif ($upgradeMode) {
+    # 升级模式：目标盘 = 检测到的数据分区所在物理盘（不再人工选盘，不清盘）
+    $upLetter = $upgradeRoot.Substring(0, 1)
+    $targetDisk = $null
+    try {
+        $upPart = Get-Partition -DriveLetter $upLetter -ErrorAction Stop
+        $targetDisk = Get-Disk -Number $upPart.DiskNumber -ErrorAction Stop
+    } catch {
+        Die "无法定位 $upgradeRoot 对应的物理U盘。" "请重新插好U盘后重试；若反复失败，请重新运行并选「重新制作」。"
+    }
+    if ($targetDisk.BusType -ne 'USB' -or $targetDisk.Size -lt ($Script:MinBaseGB * 1GB)) {
+        Die "升级目标定位异常（磁盘 $($targetDisk.Number): $($targetDisk.FriendlyName)）。" '请重新插好U盘后重试。'
+    }
+    Write-Ok ("升级目标已锁定: 磁盘 {0}  |  {1}  |  {2} GB（{3} 所在的U盘）" -f $targetDisk.Number, $targetDisk.FriendlyName, [math]::Round($targetDisk.Size / 1GB, 1), $upgradeRoot)
 } elseif ($candidates.Count -eq 1) {
     # 唯一合格 U盘 → 自动选中，免除编号输入（防误写由下方整盘清空 YES 确认兜底，§2.5.3-2）
     $targetDisk = $candidates[0]
@@ -621,27 +664,40 @@ if ($targetDisk.Size -lt ($Script:MinBaseGB * 1GB)) {
     Die "所选 U盘 容量 ${sizeGB} GB，小于最低要求 $Script:MinBaseGB GB。" "请更换容量 ≥${Script:MinBaseGB}GB（推荐 128GB）的 U盘 后重新运行；若还要装 Windows 镜像/多个 Agent，容量越大越好。"
 }
 
-# ---------------- 4. 毁盘警告 + YES 确认 ----------------
+# ---------------- 4. 毁盘警告 + YES 确认（升级模式 → 绿色无损升级确认） ----------------
 Write-Host ""
-Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Red
-Write-Host '  严重警告：制作过程将清空该 U盘 上的全部数据！' -ForegroundColor Red
-Write-Host ("  目标: 磁盘 {0}  |  {1}  |  {2} GB" -f $targetDisk.Number, $targetDisk.FriendlyName, $sizeGB) -ForegroundColor Red
-Write-Host '  该操作不可恢复，请先备份 U盘 中的重要文件。' -ForegroundColor Red
-Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Red
-$confirm = Read-Host '确认继续请输入大写 YES'
-if ($confirm -ne 'YES') { Write-Host '已取消，未对 U盘 做任何修改。'; exit 0 }
+if ($upgradeMode) {
+    Write-Host '================================================' -ForegroundColor Green
+    Write-Host ("  无损升级: 磁盘 {0}  |  {1}  |  {2} GB" -f $targetDisk.Number, $targetDisk.FriendlyName, $sizeGB) -ForegroundColor Green
+    Write-Host '  盘中文件、凭证、配置全部保留；仅更新脚本/引擎/镜像版本。' -ForegroundColor Green
+    Write-Host '================================================' -ForegroundColor Green
+    Read-Host '回车开始升级（Ctrl+C 取消）' | Out-Null
+} else {
+    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Red
+    Write-Host '  严重警告：制作过程将清空该 U盘 上的全部数据！' -ForegroundColor Red
+    Write-Host ("  目标: 磁盘 {0}  |  {1}  |  {2} GB" -f $targetDisk.Number, $targetDisk.FriendlyName, $sizeGB) -ForegroundColor Red
+    Write-Host '  该操作不可恢复，请先备份 U盘 中的重要文件。' -ForegroundColor Red
+    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Red
+    $confirm = Read-Host '确认继续请输入大写 YES'
+    if ($confirm -ne 'YES') { Write-Host '已取消，未对 U盘 做任何修改。'; exit 0 }
+}
 
-# ---------------- 5. Win ISO 选择（默认全选推荐，可跳过） ----------------
-Write-Step 'Windows 安装镜像选择'
-Write-Host '制作器将从微软官方服务器下载 Windows 安装镜像（推荐，装机必备）。'
-Write-Host '  [1] Win10 + Win11 都下载（推荐）'
-Write-Host '  [2] 仅 Win11'
-Write-Host '  [3] 仅 Win10'
-Write-Host '  [4] 跳过（稍后可手动从微软官网下载拷入 U盘 ISO 目录）'
-$isoChoice = Read-Host '请选择（直接回车 = 1 推荐）'
-if ([string]::IsNullOrWhiteSpace($isoChoice)) { $isoChoice = '1' }
-$wantWin10 = ($isoChoice -in '1','3')
-$wantWin11 = ($isoChoice -in '1','2')
+# ---------------- 5. Win ISO 选择（默认全选推荐，可跳过；升级模式跳过不动盘上镜像） ----------------
+if ($upgradeMode) {
+    Write-Ok '升级模式：Windows 镜像保持盘上现状（要重新下载请选「重新制作」）'
+    $wantWin10 = $false; $wantWin11 = $false
+} else {
+    Write-Step 'Windows 安装镜像选择'
+    Write-Host '制作器将从微软官方服务器下载 Windows 安装镜像（推荐，装机必备）。'
+    Write-Host '  [1] Win10 + Win11 都下载（推荐）'
+    Write-Host '  [2] 仅 Win11'
+    Write-Host '  [3] 仅 Win10'
+    Write-Host '  [4] 跳过（稍后可手动从微软官网下载拷入 U盘 ISO 目录）'
+    $isoChoice = Read-Host '请选择（直接回车 = 1 推荐）'
+    if ([string]::IsNullOrWhiteSpace($isoChoice)) { $isoChoice = '1' }
+    $wantWin10 = ($isoChoice -in '1','3')
+    $wantWin11 = ($isoChoice -in '1','2')
+}
 
 # ---------------- 5.5 Agent / Linux 镜像勾选（P-A A4）+ 容量动态复查 ----------------
 # Codex 可用性由 manifest 驱动：清单含 codex 组件（url 非空）才列出；否则提示跳过且 agents.json 不记 codex 条目
@@ -679,6 +735,18 @@ $openclawEstGB = [math]::Round(($openclawComponent.sizeBytes / 1GB) * 2.3, 2); i
 $piEstGB       = [math]::Round(($piComponent.sizeBytes / 1GB) * 2.3, 2);       if ($piEstGB -le 0)       { $piEstGB = 0.09 }
 $nodeEstGB     = [math]::Round(($nodeComponent.sizeBytes / 1GB) * 2.9, 2);      if ($nodeEstGB -le 0)     { $nodeEstGB = 0.11 }   # zip 解压率更高
 
+if ($upgradeMode) {
+    # 升级模式：勾选沿用盘上现状（Claude 为核心引擎始终更新；改选请走「重新制作」）
+    $wantClaude   = $true
+    $wantCodex    = ($null -ne $codexComponent    -and (Test-Path -LiteralPath (Join-Path $upgradeRoot 'bin\codex.exe')))
+    $wantOpenclaw = ($null -ne $openclawComponent -and (Test-Path -LiteralPath (Join-Path $upgradeRoot 'bin\openclaw')))
+    $wantPi       = ($null -ne $piComponent       -and (Test-Path -LiteralPath (Join-Path $upgradeRoot 'bin\pi')))
+    $wantNode     = ($null -ne $nodeComponent     -and (Test-Path -LiteralPath (Join-Path $upgradeRoot 'bin\node')))
+    $wantDebian   = (Test-Path -LiteralPath (Join-Path $upgradeRoot ("ISO\" + $DebianName)))
+    Write-Ok ("升级沿用盘上勾选: Claude Code = 装 / Codex = {0} / OpenClaw = {1} / Pi = {2} / Node = {3} / Debian 12 = {4}（要改选请选重新制作）" -f `
+        $(if ($wantCodex){'装'}else{'不装'}), $(if ($wantOpenclaw){'装'}else{'不装'}), `
+        $(if ($wantPi){'装'}else{'不装'}), $(if ($wantNode){'装'}else{'不装'}), $(if ($wantDebian){'装'}else{'不装'}))
+} else {
 $agentSel = $null
 while ($true) {
     Write-Host ''
@@ -743,6 +811,7 @@ while ($true) {
     if ($rc -eq 'C') { break }
     if ($rc -ne 'R') { Write-Host '已取消，未对 U盘 做任何修改。'; exit 0 }
     # R → 回到勾选循环
+}
 }
 Write-Ok "勾选结果: Claude Code = $(if($wantClaude){'装'}else{'不装'}) / Codex = $(if($wantCodex){'装'}else{'不装'})$(if($codexComponent){''}else{'（不可用）'}) / OpenClaw = $(if($wantOpenclaw){'装'}else{'不装'})$(if($openclawComponent){''}else{'（不可用）'}) / Pi = $(if($wantPi){'装'}else{'不装'})$(if($piComponent){''}else{'（不可用）'}) / Node = $(if($wantNode){'装'}else{'不装'}) / Debian 12 = $(if($wantDebian){'装'}else{'不装'})"
 
@@ -1070,6 +1139,13 @@ foreach ($name in $selfMadeNames) {
     $src = $downloads[$name]
     Invoke-UsbCopy -Label "镜像 $name" -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'ISO') }
 }
+# 升级模式：清理旧版维修系统 ISO（新版已拷入；旧版留着白占 ~1.4GB）
+if ($upgradeMode) {
+    $liveNow = (Get-Component 'ai-repair-live').filename
+    Get-ChildItem -LiteralPath (Join-Path $Script:UsbRoot 'ISO') -Filter 'AI-Repair-Live-v*.iso' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $liveNow } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force; Write-Ok "已清理旧版维修系统: $($_.Name)" }
+}
 foreach ($k in $winIsoLocal.Keys) {
     $src = $winIsoLocal[$k]
     Invoke-UsbCopy -Label "Windows 镜像 $k" -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'ISO') }
@@ -1111,7 +1187,12 @@ AI 电脑维修 U盘 配置目录
 - 请勿手动删除本目录
 "@
 # 5.1 settings.conf（Windows 启动器硬依赖 ACTIVATE_URL/BALANCE_URL；bash 与 PS 逐行解析双兼容格式）
-Set-Content -Path (Join-Path $Script:UsbRoot 'config\settings.conf') -Encoding ascii -Value @"
+# 1.6.0：已存在即保留（现场配置/促销码不覆盖；升级与重跑均生效）
+$settingsConf = Join-Path $Script:UsbRoot 'config\settings.conf'
+if (Test-Path -LiteralPath $settingsConf) {
+    Write-Ok '保留现有 config\settings.conf（现场配置不覆盖）'
+} else {
+    Set-Content -Path $settingsConf -Encoding ascii -Value @"
 RECORD_MODE=customer
 GATEWAY_BASE_URL=https://tokeneff.com
 ACTIVATE_URL=https://tokeneff.com/api/usb/activate
@@ -1119,6 +1200,7 @@ BALANCE_URL=https://tokeneff.com/api/usb/balance
 PROMO_CODE=
 CONFIG_OVERRIDE=1
 "@
+}
 
 # 场景③ Windows 在线维修双击入口（repair-on-windows.bat/.ps1，与制作脚本同源同目录；
 # WebClient 二进制下载，避免 Set-Content 给 bat 写入 BOM 导致 @echo off 失效）
@@ -1397,7 +1479,11 @@ Remove-Item -LiteralPath $Script:ExtractDir -Recurse -Force -ErrorAction Silentl
 Show-StepTimingSummary
 Write-Host ""
 Write-Host '===============================================' -ForegroundColor Green
-Write-Host '  制作完成，可以拔下使用了！' -ForegroundColor Green
+if ($upgradeMode) {
+    Write-Host '  无损升级完成！盘中文件、凭证、配置均已保留。' -ForegroundColor Green
+} else {
+    Write-Host '  制作完成，可以拔下使用了！' -ForegroundColor Green
+}
 Write-Host '===============================================' -ForegroundColor Green
 Write-Host ''
 Write-Host '使用方法: 将 U盘 插入需要维修的电脑 → 开机按启动菜单键(F12/F9/Esc) → 选择 U盘 启动'

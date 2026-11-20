@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.5.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.6.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.5.0（环境自审：贴错命令/装错场景自动纠偏——维修 Live 环境里贴制盘命令即拦截并指路、
-#       成品U盘在场时告知「修电脑 vs 升级」正确入口、非 Linux 系统指路 ps1/Mac；
-#       交互 read 全部改绑 /dev/tty，curl|sudo bash 一键命令下不再吞脚本行）
+# 版本: 1.6.0（升级直达：检测到成品U盘时三选一菜单默认「无损升级」，升级模式跳过
+#       选盘/清盘确认/组件勾选问答，按盘上现状增量更新；settings.conf 存在即保留不覆盖；
+#       修复结尾使用提示在 umount 后检查 $MNT 恒假的存量 bug）
+# 1.5.0（环境自审）及更早见 git history
 # 1.4.0（场景③Linux 投放/引擎/checksum 活 bug）及更早见 git history
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
@@ -25,7 +26,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.5.0"
+SCRIPT_VERSION="1.6.0"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -104,15 +105,45 @@ if [ -f "$LIVE_MARKER" ] && [ "${AI_REPAIR_MAKER_FORCE:-0}" != "1" ]; then
     printf '确需在此环境重做/升级 U盘（罕见）: 先下载本脚本，再 sudo AI_REPAIR_MAKER_FORCE=1 bash usb-v1.0.sh\n'
     exit 0
 fi
+UPGRADE_MODE=0; UPGRADE_ROOT=""
 if [ -n "$AUDIT_USBS" ]; then
+    mapfile -t _AUDIT_ROOTS <<<"$AUDIT_USBS"
     c_warn "检测到已制作的本项目U盘："
     printf '%s\n' "$AUDIT_USBS" | sed 's/^/      · /'
-    printf '    · 要【修电脑】→ 不要用制作器：Linux 在U盘上运行 bash repair-on-linux.sh；Windows 双击U盘 repair-on-windows.bat\n'
-    printf '    · 要【升级/重做U盘】→ 继续本次制作器（对已制作的盘自动无损升级，数据全保留）\n'
-    _AUDIT_GO=""
-    ask -rp '本次继续制作器？(Y/n): ' _AUDIT_GO || true
-    case "${_AUDIT_GO:-}" in
-        n|N|no|NO) die "已退出制作器。" "修电脑请按上方提示运行U盘启动器；升级/重做请重新运行本命令并选 y。" ;;
+    cat <<'AUDIT_MENU'
+
+    接下来想做什么？
+      [1] 无损升级（推荐）—— 更新脚本/AI引擎/维修系统/Ventoy引导；凭证、配置、盘中文件全保留
+      [2] 重新制作 —— 清空重做（走完整流程，含各组件重新勾选）
+      [3] 退出 —— 我其实是想修电脑（Linux 在U盘上运行 bash repair-on-linux.sh；Windows 双击 repair-on-windows.bat）
+AUDIT_MENU
+    _CHOICE=""
+    ask -rp '请选择（直接回车 = 1 无损升级）: ' _CHOICE || true
+    case "${_CHOICE:-1}" in
+        1)
+            UPGRADE_MODE=1
+            if [ "${#_AUDIT_ROOTS[@]}" -gt 1 ]; then
+                i=1
+                for r in "${_AUDIT_ROOTS[@]}"; do printf '      [%d] %s\n' "$i" "$r"; i=$((i+1)); done
+                _SEL=""
+                ask -rp "要升级哪一只？（输入编号 1-${#_AUDIT_ROOTS[@]}）: " _SEL || true
+                [[ "$_SEL" =~ ^[0-9]+$ ]] && [ "$_SEL" -ge 1 ] && [ "$_SEL" -le "${#_AUDIT_ROOTS[@]}" ] \
+                    || die "输入的编号无效。" "请重新运行本命令并输入列表中的编号。"
+                UPGRADE_ROOT="${_AUDIT_ROOTS[$((_SEL-1))]}"
+            else
+                UPGRADE_ROOT="${_AUDIT_ROOTS[0]}"
+            fi
+            c_ok "进入无损升级模式（目标: ${UPGRADE_ROOT}）——盘中文件、凭证、配置全保留"
+            ;;
+        2)
+            c_ok "进入重新制作流程（U盘将被清空，请注意备份）"
+            ;;
+        3)
+            die "已退出制作器。" "要修电脑请运行U盘启动器：Linux bash repair-on-linux.sh；Windows 双击 repair-on-windows.bat。"
+            ;;
+        *)
+            die "无效选择：${_CHOICE}（可选 1/2/3）。" "请重新运行本命令。"
+            ;;
     esac
 fi
 
@@ -215,7 +246,21 @@ done
 
 echo ""
 usb_size() { lsblk -d -n -o SIZE,MODEL "/dev/$1" | head -n1; }
-if [ "${#CANDIDATES[@]}" -eq 1 ]; then
+if [ "$UPGRADE_MODE" = "1" ]; then
+    # 升级模式：目标盘 = 检测到的数据分区所在物理盘（不再人工选盘，不清盘）
+    _UPART="$(findmnt -no SOURCE "$UPGRADE_ROOT" 2>/dev/null | head -n1)"
+    _UDISK="${_UPART%%[0-9]*}"   # /dev/sdb1 → /dev/sdb
+    case "$_UDISK" in
+        /dev/sd[a-z]|/dev/sd[a-z][a-z]) ;;
+        *) die "无法定位 ${UPGRADE_ROOT} 对应的U盘设备（${_UPART:-未挂载}）。" "请重新插好U盘后重试；若反复失败，请重新运行并选「重新制作」。" ;;
+    esac
+    TARGET_NAME="${_UDISK#/dev/}"
+    _FOUND=0
+    for d in "${CANDIDATES[@]}"; do [ "$d" = "$TARGET_NAME" ] && { _FOUND=1; break; }; done
+    [ "$_FOUND" = "1" ] || die "升级目标 /dev/$TARGET_NAME 不在本次检测到的U盘列表中。" "请重新插好U盘后重试。"
+    read -r size model < <(usb_size "$TARGET_NAME")
+    c_ok "升级目标已锁定: /dev/$TARGET_NAME  |  ${model:-未知型号}  |  ${size:-未知容量}（${UPGRADE_ROOT} 所在的U盘）"
+elif [ "${#CANDIDATES[@]}" -eq 1 ]; then
     # 唯一合格 U盘 → 自动选中（防误写由下方整盘清空 YES 确认兜底）
     TARGET_NAME="${CANDIDATES[0]}"
     read -r size model < <(usb_size "$TARGET_NAME")
@@ -255,15 +300,23 @@ case "$AGENTS_ARG" in *[^a-z,]*)
     die "--agents 参数含非法字符（只接受逗号分隔的 claude/codex/openclaw/pi/node/linux）。" "" ;;
 esac
 
-# ---------------- 5. 毁盘警告 + YES 确认 ----------------
+# ---------------- 5. 毁盘警告 + YES 确认（升级模式 → 绿色无损升级确认） ----------------
 echo ""
-printf '\033[31m!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\033[0m\n'
-printf '\033[31m  严重警告：制作过程将清空该 U盘 上的全部数据！\033[0m\n'
-printf '\033[31m  目标: %s （约 %dGB）\033[0m\n' "$TARGET_DEV" "$SIZE_GB"
-printf '\033[31m  该操作不可恢复，请先备份 U盘 中的重要文件。\033[0m\n'
-printf '\033[31m!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\033[0m\n'
-ask -rp "确认继续请输入大写 YES: " CONFIRM
-[ "$CONFIRM" = "YES" ] || { echo "已取消，未对 U盘 做任何修改。"; exit 0; }
+if [ "$UPGRADE_MODE" = "1" ]; then
+    printf '\033[32m================================================\033[0m\n'
+    printf '\033[32m  无损升级: %s （约 %dGB）\033[0m\n' "$TARGET_DEV" "$SIZE_GB"
+    printf '\033[32m  盘中文件、凭证、配置全部保留；仅更新脚本/引擎/镜像版本。\033[0m\n'
+    printf '\033[32m================================================\033[0m\n'
+    ask -rp '回车开始升级（Ctrl+C 取消）: ' _UGO || true
+else
+    printf '\033[31m!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\033[0m\n'
+    printf '\033[31m  严重警告：制作过程将清空该 U盘 上的全部数据！\033[0m\n'
+    printf '\033[31m  目标: %s （约 %dGB）\033[0m\n' "$TARGET_DEV" "$SIZE_GB"
+    printf '\033[31m  该操作不可恢复，请先备份 U盘 中的重要文件。\033[0m\n'
+    printf '\033[31m!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\033[0m\n'
+    ask -rp "确认继续请输入大写 YES: " CONFIRM
+    [ "$CONFIRM" = "YES" ] || { echo "已取消，未对 U盘 做任何修改。"; exit 0; }
+fi
 
 # ---------------- 5.5 Agent / Linux 镜像勾选（P-A A4）+ 容量动态复查 ----------------
 # Codex 可用性由 manifest 驱动：清单含 codex 组件（url 非空）才可选；否则提示跳过且 agents.json 不记 codex 条目
@@ -295,7 +348,16 @@ OC_GB=1         # ~154MB 下载 / ~380MB 落盘，取整 1GB 余量
 PI_GB=1         # ~33MB 下载 / ~90MB 落盘，取整 1GB 余量
 NODE_GB=1       # ~36MB zip / ~110MB 落盘，取整 1GB 余量
 
-if [ -n "$AGENTS_ARG" ]; then
+if [ "$UPGRADE_MODE" = "1" ] && [ -z "$AGENTS_ARG" ]; then
+    # 升级模式：勾选沿用盘上现状（Claude 为核心引擎始终更新；改选请走「重新制作」）
+    WANT_CLAUDE=1
+    WANT_CODEX=0;    [ "$CODEX_AVAILABLE" = "1" ] && [ -f "$UPGRADE_ROOT/bin/codex.exe" ] && WANT_CODEX=1
+    WANT_OPENCLAW=0; [ "$OC_AVAILABLE" = "1" ]   && [ -d "$UPGRADE_ROOT/bin/openclaw" ]  && WANT_OPENCLAW=1
+    WANT_PI=0;       [ "$PI_AVAILABLE" = "1" ]   && [ -d "$UPGRADE_ROOT/bin/pi" ]        && WANT_PI=1
+    WANT_NODE=0;     [ "$NODE_AVAILABLE" = "1" ] && [ -d "$UPGRADE_ROOT/bin/node" ]      && WANT_NODE=1
+    WANT_DEBIAN=0;   [ -f "$UPGRADE_ROOT/ISO/${DEBIAN_NAME}" ] && WANT_DEBIAN=1
+    c_ok "升级沿用盘上勾选: Claude=$( [ $WANT_CLAUDE = 1 ] && echo 装 || echo 不装 ) / Codex=$( [ $WANT_CODEX = 1 ] && echo 装 || echo 不装 ) / OpenClaw=$( [ $WANT_OPENCLAW = 1 ] && echo 装 || echo 不装 ) / Pi=$( [ $WANT_PI = 1 ] && echo 装 || echo 不装 ) / Node=$( [ $WANT_NODE = 1 ] && echo 装 || echo 不装 ) / Debian=$( [ $WANT_DEBIAN = 1 ] && echo 装 || echo 不装 )"
+elif [ -n "$AGENTS_ARG" ]; then
     # --agents 参数优先：逗号分隔，未列项视为不装；不可用项忽略并提示
     WANT_CLAUDE=0; WANT_CODEX=0; WANT_OPENCLAW=0; WANT_PI=0; WANT_NODE=0; WANT_DEBIAN=0
     case ",$AGENTS_ARG," in *",claude,"*)   WANT_CLAUDE=1 ;; esac
@@ -788,6 +850,15 @@ copy_progress() {  # $1=src $2=destdir
 for name in ai-repair-live winpe 'memtest86+'; do
     [ -n "${LOCAL_FILE[$name]:-}" ] && usb_retry "镜像 ${name}" copy_progress "${LOCAL_FILE[$name]}" "$MNT/ISO"
 done
+# 升级模式：清理旧版维修系统 ISO（新版已拷入；旧版留着白占 ~1.4GB）
+if [ "$UPGRADE_MODE" = "1" ]; then
+    _LIVE_NOW="$(json_get ai-repair-live filename)"
+    for _OLD in "$MNT"/ISO/AI-Repair-Live-v*.iso; do
+        [ -e "$_OLD" ] || continue
+        [ "$(basename "$_OLD")" = "$_LIVE_NOW" ] && continue
+        rm -f "$_OLD" && c_ok "已清理旧版维修系统: $(basename "$_OLD")"
+    done
+fi
 
 # Debian 12 netinst（P-A A4：勾选且下载成功才拷入）
 if [ -n "$DEBIAN_ISO" ]; then
@@ -824,7 +895,10 @@ AI 电脑维修 U盘 配置目录
 - auth_token: 首次使用时由维修助手引导您创建，存放网关访问凭证
 - 请勿手动删除本目录
 EOF
-cat > "$MNT/config/settings.conf" <<'EOF'
+if [ -f "$MNT/config/settings.conf" ]; then
+    c_ok "保留现有 config/settings.conf（现场配置不覆盖）"
+else
+    cat > "$MNT/config/settings.conf" <<'EOF'
 RECORD_MODE=customer
 GATEWAY_BASE_URL=https://tokeneff.com
 ACTIVATE_URL=https://tokeneff.com/api/usb/activate
@@ -832,6 +906,7 @@ BALANCE_URL=https://tokeneff.com/api/usb/balance
 PROMO_CODE=
 CONFIG_OVERRIDE=1
 EOF
+fi
 printf '%s\n' "$SCRIPT_VERSION" > "$MNT/maker_version"   # 场景③启动器激活上报用（ps1/repair-on-linux.sh 读取）
 
 # ---------------- 8.5 制作时签发 USB token（可选，可跳过；幂等） ----------------
@@ -1140,12 +1215,17 @@ fi
 if [ "$PI_INSTALLED" = "1" ]; then
     [ -f "$MNT/bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ] || die "bin/pi 入口缺失。" "请重新运行制作器。"
 fi
-umount "$MNT"
-
+sync
 echo ""
-printf '\033[32m===============================================\033[0m\n'
-printf '\033[32m  制作完成，可以拔下使用了！\033[0m\n'
-printf '\033[32m===============================================\033[0m\n'
+if [ "$UPGRADE_MODE" = "1" ]; then
+    printf '\033[32m===============================================\033[0m\n'
+    printf '\033[32m  无损升级完成！盘中文件、凭证、配置均已保留。\033[0m\n'
+    printf '\033[32m===============================================\033[0m\n'
+else
+    printf '\033[32m===============================================\033[0m\n'
+    printf '\033[32m  制作完成，可以拔下使用了！\033[0m\n'
+    printf '\033[32m===============================================\033[0m\n'
+fi
 echo ""
 echo "使用方法: 将 U盘 插入需要维修的电脑 → 开机按启动菜单键(F12/F9/Esc) → 选择 U盘 启动"
 if [ -f "$MNT/repair-on-windows.bat" ]; then
@@ -1167,3 +1247,4 @@ if [ -n "$DEBIAN_ISO" ]; then
 fi
 echo "提示: 需要 Windows 安装镜像时，请从微软官网下载 ISO 后拷入 U盘 ISO 目录："
 echo "      https://www.microsoft.com/zh-cn/software-download/"
+umount "$MNT"

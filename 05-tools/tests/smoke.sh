@@ -247,20 +247,20 @@ grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启�
 grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
 [[ $S73 -eq 1 ]] && ok "启动器 0.5.6：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
 
-# 检查 7-4：制作器版本 1.5.0（四处全改：ps1 头注释+常量、sh 头注释+常量）
+# 检查 7-4：制作器版本 1.6.0（四处全改：ps1 头注释+常量、sh 头注释+常量）
 S74=1
 # 不用 ^ 锚定：ps1 必须带 UTF-8 BOM（PS 5.1 zh-CN 无 BOM 按 GBK 解析必炸，e888564 教训），BOM 在行首
-grep -q "usb-v1.0.ps1 版本: 1.5.0" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 头注释版本未升 1.5.0"; }
-grep -q "ScriptVersion   = '1.5.0'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 常量版本未升 1.5.0"; }
-grep -q "^# usb-v1.0.sh 版本: 1.5.0" "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 头注释版本未升 1.5.0"; }
-grep -q 'SCRIPT_VERSION="1.5.0"' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 常量版本未升 1.5.0"; }
+grep -q "usb-v1.0.ps1 版本: 1.6.0" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 头注释版本未升 1.6.0"; }
+grep -q "ScriptVersion   = '1.6.0'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 常量版本未升 1.6.0"; }
+grep -q "^# usb-v1.0.sh 版本: 1.6.0" "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 头注释版本未升 1.6.0"; }
+grep -q 'SCRIPT_VERSION="1.6.0"' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 常量版本未升 1.6.0"; }
 # 1.3.5 遗留：codex 拷后改名 codex.exe（robocopy 保留源文件名，不改名最终校验 bin\codex.exe 必炸）
 grep -q "Copy-FileWithProgress \$codexSrc (Join-Path \$Script:UsbRoot 'bin') 'codex.exe'" "$MAKER/usb-v1.0.ps1" \
   || { S74=0; bad "ps1 codex 落盘未改名 codex.exe"; }
 # 三振/降级语义锚：降级分支（确定性失败）保留 Write-Warn + installedFinal = $false，不得被三振 Die 吞掉
 grep -q 'Write-Warn "OpenClaw 落盘失败' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 OpenClaw 降级分支（Write-Warn）缺失"; }
 grep -q 'openclawInstalledFinal = \$false' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 installedFinal = \$false 降级语义缺失"; }
-[[ $S74 -eq 1 ]] && ok "两制作器版本 1.5.0（四处）+ codex 改名 + 降级语义锚"
+[[ $S74 -eq 1 ]] && ok "两制作器版本 1.6.0（四处）+ codex 改名 + 降级语义锚"
 
 # 检查 7-4b：环境自审（1.5.0 / 启动器 0.2.0）——贴错命令/装错场景自动纠偏三端齐备
 S74B=1
@@ -275,6 +275,30 @@ grep -q 'repair-on-windows.bat' "$MAKER/usb-v1.0.ps1" || { S74B=0; bad "ps1 自�
 grep -qE '(^|[^a-z])read -r(s)?p ' "$MAKER/usb-v1.0.sh" "$MAKER/repair-on-linux.sh" && { S74B=0; bad "仍有裸交互 read（curl|bash 会吞脚本行）"; }
 grep -q 'AI_REPAIR_ASK_STDIN' "$MAKER/usb-v1.0.sh" "$MAKER/repair-on-linux.sh" || { S74B=0; bad "ask() 缺测试回落开关"; }
 [[ $S74B -eq 1 ]] && ok "三端环境自审 + ask() tty 绑定（curl|bash 免吞行）"
+
+# 检查 7-4c：升级直达（1.6.0）——检测到成品U盘三选一默认「无损升级」，升级模式跳过制盘问答
+S74C=1
+grep -q '直接回车 = 1 无损升级' "$MAKER/usb-v1.0.sh" || { S74C=0; bad "sh 缺三选一菜单（默认无损升级）"; }
+grep -q '请选择（直接回车 = 1 无损升级）' "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "ps1 缺三选一菜单（默认无损升级）"; }
+grep -q 'UPGRADE_MODE=1' "$MAKER/usb-v1.0.sh" || { S74C=0; bad "sh 缺 UPGRADE_MODE 置位"; }
+grep -q '\$upgradeMode = \$true' "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "ps1 缺 upgradeMode 置位"; }
+# 升级模式选盘：按检测到的数据分区定位物理盘，不再人工选择
+grep -q 'findmnt -no SOURCE' "$MAKER/usb-v1.0.sh" || { S74C=0; bad "sh 缺升级目标定位（findmnt）"; }
+grep -q 'Get-Partition -DriveLetter' "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "ps1 缺升级目标定位（Get-Partition）"; }
+# 升级确认：绿色无损横幅替换红色毁盘 YES
+grep -q '回车开始升级' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "缺升级模式绿色确认（回车开始升级）"; }
+# 勾选沿用盘上现状（升级不重问组件勾选）
+grep -q '升级沿用盘上勾选' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "缺「升级沿用盘上勾选」分流"; }
+# settings.conf 存在即保留（现场配置不覆盖）
+grep -q '保留现有 config/settings.conf' "$MAKER/usb-v1.0.sh" || { S74C=0; bad "sh 缺 settings.conf 保留守卫"; }
+grep -q '保留现有 config.settings.conf' "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "ps1 缺 settings.conf 保留守卫"; }
+# 升级清理旧版 Live ISO（避免盘上堆积 1.4GB 旧包）
+grep -q 'AI-Repair-Live-v\*.iso' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "缺旧版 Live ISO 清理"; }
+# 升级完成横幅
+grep -q '无损升级完成' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "缺「无损升级完成」横幅"; }
+# 出错可退出指路（选项 3 修电脑指路保留）
+grep -q '我其实是想修电脑' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "三选一缺「退出修电脑」指路项"; }
+[[ $S74C -eq 1 ]] && ok "升级直达：三选一默认无损升级 + 选盘/勾选/确认分流 + settings.conf 守卫 + 旧 ISO 清理"
 
 # 检查 7-5：解压进度心跳 + exFAT 容错（1.3.2）
 S75=1

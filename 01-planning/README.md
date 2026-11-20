@@ -37,6 +37,7 @@
   - [ ] 真机启动测试（待 U盘/测试机）
 - [ ] 场景三（Windows 在线维修）新功能：① repair-on-windows.ps1 启动器 → ② 维修记录系统（customer/enterprise 双模式）+ 机器指纹召回 → ④ 凭证残留策略 → ⑤ 任务文本环境感知增强 → ⑥ tokeneff key 激活发放与引流转化（激活制 + 分层验证 + 并发限额 + 推广码分成，方案见 04-design/技术方案_AI电脑维修U盘_场景三Windows在线维修新增功能_20261013.md）
 - [x] 场景三 Linux 在线维修启动器（2026-11-20）：方案定稿（三轮 critic 8.5 ACCEPT）→ **已实现** repair-on-linux.sh v0.1.0 + usb-v1.0.sh 1.4.0（linux-x64 引擎投放 + .sha256 旁车 + maker_version；顺带修复 win32 checksum 多行 manifest 恒空活 bug）+ 冒烟 45/45 + 存量 35/35 + verifier 独立复验 **PASS**（0 阻断）。余项：真机验收 K1-L（用户）（方案见 04-design/技术方案_AI电脑维修U盘_场景三Linux在线维修启动器_20261120.md）。线上已发布（2026-11-20）：usb.tokeneff.com/maker/ 同步 repair-on-linux.sh + 制作器 1.4.0 双侧（sha256 双端一致、ps1 BOM 保留、容器重建后 healthy）
+- [x] 制作器升级直达（2026-11-20）：usb-v1.0 双侧 1.6.0——检测到成品U盘时三选一菜单（回车默认「无损升级」/ 重新制作 / 退出指路修电脑）；升级模式跳过选盘（findmnt/Get-Partition 定位检测盘所在物理盘）、跳过清盘 YES（改绿色无损确认）、跳过 Win 镜像与组件勾选问答（沿盘上现状，Claude 核心引擎始终更新）；settings.conf 存在即保留（不再覆盖 PROMO_CODE 等现场配置）；升级清理旧版 Live ISO；修复 sh 结尾使用提示在 umount 后查 $MNT 恒假存量 bug。冒烟 37/37 + 启动器 48/48；线上 sha 双端一致、ps1 BOM 保留、网页升级一节文案同步
 
 ## 文档目录说明
 
