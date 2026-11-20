@@ -1,7 +1,59 @@
 {
   "_comment": "AI 电脑维修 U盘 一键制作器 · 组件清单（S5 web 首次制作流程定稿版）。发布流程每次发布重写本文件；安装器启动时总是拉取最新 manifest —— 组件升级 = 改本文件，无需改安装器（方案 §2.5.4）。托管: usb.tokeneff.com/maker/（与主站分域，故障隔离）。v0.1 阶段 ventoy/winpe/memtest 仍为占位（K0 实测/P4.5 构建后填充），ai-repair-live 为真实可下载产物。",
-  "version": "1.0.6",
-  "generated": "2026-10-15T16:10:00+08:00",
+  "version": "1.1.0",
+  "generated": "2026-11-21T01:14:55+0800",
+  "launcher": {
+    "version": "0.5.6",
+    "filename": "repair-on-windows.ps1",
+    "url": "https://usb.tokeneff.com/downloads/repair-on-windows.ps1",
+    "sizeBytes": 63249,
+    "sha256": "e60081e199b267feaccd9d46d94f30a932e1c3fe0c5fda7b4c643d2382da6ca0",
+    "notes": "0.5.6：CSRF 修复——POST 补 X-Requested-With 头 + 服务端豁免 /api/usb/*（根治激活被误报「伪造序列号」，0.4.5 老盘免重装）；Pi/Claude 启动前清理宿主机残留 ANTHROPIC_API_KEY/OAUTH_TOKEN（Pi 直连 anthropic 超时根治，网关不再收到脏 x-api-key）；Pi 显式钉死 --provider tokeneff --model glm-5.2；403 激活分支文案中性化并透出服务端 detail。0.5.5：修复退出残留——会话结束/退出清理时强杀挂载 U盘 openclaw/pi 路径的残留 node 进程（根治 openclaw-agent.sqlite 锁导致 %TEMP%\\ai-repair 删除失败），删除失败重试 3 次且不再谎报『无残留』。0.5.4：[2]/[6] 合并为统一 Pi 入口。0.5.1：U盘插入自动弹出。"
+  },
+  "assets": [
+    {
+      "path": "config\\office\\CLAUDE.md",
+      "url": "https://usb.tokeneff.com/maker/office-CLAUDE.md",
+      "sizeBytes": 1903,
+      "sha256": "b4e032943c797076304f2c3ee7ad74d7cce9a5525a73cc809064be0bcbc3710e"
+    },
+    {
+      "path": "config\\claude-skills\\smart-diagnosis\\SKILL.md",
+      "url": "https://usb.tokeneff.com/maker/claude-skills/smart-diagnosis.md",
+      "sizeBytes": 1788,
+      "sha256": "cd09e759fc0c2a5d31050723c4f88fd728a9b0b6b414fd989f8fc84a43b0737e"
+    },
+    {
+      "path": "config\\claude-skills\\data-rescue\\SKILL.md",
+      "url": "https://usb.tokeneff.com/maker/claude-skills/data-rescue.md",
+      "sizeBytes": 1914,
+      "sha256": "986743325d1c77e3b324da0d3862f424e0a92cb8f534cb222dd0eeba16743ab2"
+    },
+    {
+      "path": "config\\claude-skills\\network-triage\\SKILL.md",
+      "url": "https://usb.tokeneff.com/maker/claude-skills/network-triage.md",
+      "sizeBytes": 1542,
+      "sha256": "284343d39ef841e70715011bae970af71849d6795958b5dd4f82cbfa87fc7eab"
+    },
+    {
+      "path": "config\\claude-skills\\reinstall-guardrail\\SKILL.md",
+      "url": "https://usb.tokeneff.com/maker/claude-skills/reinstall-guardrail.md",
+      "sizeBytes": 1765,
+      "sha256": "30a2d6437a187f2cf391ef672a3f466e46be999d95d042fd8264939a8278aeb1"
+    },
+    {
+      "path": "config\\claude-skills\\systematic-debugging\\SKILL.md",
+      "url": "https://usb.tokeneff.com/maker/claude-skills/systematic-debugging.md",
+      "sizeBytes": 1945,
+      "sha256": "556d901f59827f8861765bf2834ec944b8444909949840c75b66f412c35c00a7"
+    },
+    {
+      "path": "config\\claude-skills\\verification-before-completion\\SKILL.md",
+      "url": "https://usb.tokeneff.com/maker/claude-skills/verification-before-completion.md",
+      "sizeBytes": 1641,
+      "sha256": "5a3f8c3c33de98c04af7acd1089b77e46089c3803385d043afd779ea91c7f010"
+    }
+  ],
   "components": [
     {
       "name": "ventoy",
@@ -60,13 +112,13 @@
     },
     {
       "name": "node",
-      "filename": "node-v24.22.0-win-x64.zip",
-      "url": "https://usb.tokeneff.com/downloads/node-v24.22.0-win-x64.zip",
-      "sizeBytes": 37733703,
-      "sha256": "f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3",
+      "filename": "node-v26.13.0-win-x64.zip",
+      "url": "https://usb.tokeneff.com/downloads/node-v26.13.0-win-x64.zip",
+      "sizeBytes": 41157375,
+      "sha256": "dcc60d59a0746999f99064a01c020445d54d84228c691cdbf25b49ac3b59150a",
       "required": false,
-      "version": "24.22.0",
-      "notes": "Node.js v24.22.0 LTS 官方 win-x64 zip（便携运行时，OpenClaw/Pi 共用，勾选 [3]/[4] 时自动附带）。官方 npmmirror 镜像下载、官方 SHASUMS256.txt 钉值校验，解压到 U盘 bin\\node\\。来源: https://nodejs.org/dist/v24.22.0/"
+      "version": "26.13.0",
+      "notes": "Node.js v26.13.0 LTS (Lithium) 官方 win-x64 zip（便携运行时，OpenClaw/Pi 共用，勾选 [3]/[4] 时自动附带）。官方 SHASUMS256.txt 钉值校验，解压到 U盘 bin\\node\\。来源: https://nodejs.org/dist/v26.13.0/"
     },
     {
       "name": "openclaw",

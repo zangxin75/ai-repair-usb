@@ -212,7 +212,7 @@ grep -q '安装 Debian 12' "$MAKER/usb-v1.0.sh" || { S67=0; bad "usb-v1.0.sh ven
 
 # ───────────────────────── 第 7 节：P-B 产物断言（多Agent工作站 P-B：OpenClaw/Pi/Node） ─────────────────────────
 
-# 检查 7-1：manifest 1.0.6 含 node/openclaw/pi 组件（url + sha256 非空，供应链钉值）
+# 检查 7-1：manifest 1.1.0 含 node/openclaw/pi 组件（url + sha256 非空，供应链钉值）
 S71=1
 for comp in node openclaw pi; do
   python3 - "$MAKER/manifest.json" "$comp" <<'PYCHK' || { S71=0; bad "manifest.json 组件 $comp 缺失或未钉 sha256"; }
@@ -224,8 +224,8 @@ for c in m['components']:
 sys.exit(1)
 PYCHK
 done
-grep -q '"version": "1.0.6"' "$MAKER/manifest.json" || { S71=0; bad "manifest 版本应为 1.0.6"; }
-[[ $S71 -eq 1 ]] && ok "manifest 1.0.6：node/openclaw/pi 组件已钉 url+sha256"
+grep -q '"version": "1.1.0"' "$MAKER/manifest.json" || { S71=0; bad "manifest 版本应为 1.1.0"; }
+[[ $S71 -eq 1 ]] && ok "manifest 1.1.0：node/openclaw/pi 组件已钉 url+sha256"
 
 # 检查 7-2：两制作器含 OpenClaw/Pi 勾选 + Node 运行时处理 + 预装包下载段
 S72=1
