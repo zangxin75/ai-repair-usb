@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.3.9  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.4.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.3.9（1.3.7：掉盘鲁棒性——下载缓存固定到 ~/.cache 跨次保留、两段式落盘（本机暂存→rsync 对账拷入）、
-#       掉盘检测（mountpoint）+ nonce 重定位恢复 + 三振退出、agents.json 原子写。目标平台=Linux（依赖 util-linux））
+# 版本: 1.4.0（场景③Linux：投放 repair-on-linux.sh 入口 + bin/claude-linux 便携引擎（.sha256 旁车）+
+#       写 maker_version + 完结提示；修复 1.2.x 起活 bug——多行 manifest 下 win32-x64 checksum 同行
+#       匹配恒空致便携 claude.exe 被静默跳过，改块内范围模式。1.3.9/1.3.7 见 git history）
 # 状态: 草稿（Ventoy CLI 参数待 K0 实测后定稿，见 TODO(K0)）
 # 设计依据: 技术方案_AI电脑维修U盘_总体设计_20260912.md §2.5.2 / §2.5.3
 #
@@ -23,7 +24,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.3.9"
+SCRIPT_VERSION="1.4.0"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -418,7 +419,9 @@ if [ "$WANT_CLAUDE" != "1" ]; then
     echo "    未勾选 Claude Code，跳过 claude.exe 下载。"
 elif CLAUDE_VER="$(fetch_retry "${CLAUDE_GCS_BASE}/stable" - | tr -d '[:space:]')" && [ -n "$CLAUDE_VER" ]; then
     CLAUDE_MANIFEST="${CLAUDE_GCS_BASE}/${CLAUDE_VER}/manifest.json"
-    CLAUDE_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n 's/.*"win32-x64"[^C]*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)"
+    # 1.4.0 修复活 bug：官方 manifest 实为多行 pretty-print，旧同行匹配模式恒输出空
+    # → CLAUDE_SHA 空 → 便携 claude.exe 从 1.2.x 起被静默永久跳过。改块内范围模式。
+    CLAUDE_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n '/"win32-x64":/,/}/s/.*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)"
     if [ -z "$CLAUDE_SHA" ]; then
         c_warn "无法从官方 manifest 取得 win32-x64 checksum，跳过便携版 claude.exe（不阻断制作）。"
     elif cache_hit "${CACHE}/portable-bin/claude.exe" "$CLAUDE_SHA"; then
@@ -439,6 +442,34 @@ elif CLAUDE_VER="$(fetch_retry "${CLAUDE_GCS_BASE}/stable" - | tr -d '[:space:]'
     fi
 else
     c_warn "Claude Code 官方分发桶不可达，跳过便携版 claude.exe（不阻断制作）。"
+fi
+# 场景③ Linux 便携引擎（repair-on-linux.sh 便携优先链第一环；同一 WANT_CLAUDE 勾选，失败不阻断）
+# linux-x64 资产为裸 ELF 单文件 claude（~294MB），非 zip 包
+CLAUDE_LINUX=""; CLAUDE_LINUX_SHA=""
+if [ "$WANT_CLAUDE" != "1" ]; then
+    echo "    未勾选 Claude Code，跳过 claude-linux 下载。"
+elif [ -z "${CLAUDE_VER:-}" ] || [ -z "${CLAUDE_MANIFEST:-}" ]; then
+    c_warn "官方分发桶不可达（上步已警告），跳过 claude-linux 下载（不阻断制作）——Linux 启动器将回落本机/在线。"
+else
+    CLAUDE_LINUX_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n '/"linux-x64":/,/}/s/.*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)"
+    if [ -z "$CLAUDE_LINUX_SHA" ]; then
+        c_warn "无法从官方 manifest 取得 linux-x64 checksum，跳过便携 claude-linux（不阻断制作）。"
+    elif cache_hit "${CACHE}/portable-bin/claude-linux" "$CLAUDE_LINUX_SHA"; then
+        CLAUDE_LINUX="${CACHE}/portable-bin/claude-linux"
+        c_ok "缓存命中: claude-linux（跳过下载，官方 sha256 校验通过）"
+    elif fetch_retry "${CLAUDE_GCS_BASE}/${CLAUDE_VER}/linux-x64/claude" "${CACHE}/portable-bin/TempClaudeLinux"; then
+        actual="$(sha256sum "${CACHE}/portable-bin/TempClaudeLinux" | awk '{print $1}')"
+        if [ "${actual,,}" = "${CLAUDE_LINUX_SHA,,}" ]; then
+            mv "${CACHE}/portable-bin/TempClaudeLinux" "${CACHE}/portable-bin/claude-linux"
+            CLAUDE_LINUX="${CACHE}/portable-bin/claude-linux"
+            c_ok "便携版 claude-linux 就绪（${CLAUDE_VER}，官方 sha256 校验通过）"
+        else
+            rm -f "${CACHE}/portable-bin/TempClaudeLinux"
+            c_warn "便携版 claude-linux sha256 校验失败，已跳过（不阻断制作）——Linux 启动器将回落本机/在线。"
+        fi
+    else
+        c_warn "便携版 claude-linux 下载失败。不阻断制作——Linux 启动器将回落本机/在线。"
+    fi
 fi
 if [ "$WANT_CLAUDE" = "1" ] || [ "$WANT_CODEX" = "1" ]; then
     if cache_hit "${CACHE}/portable-bin/PortableGit.zip" "$PORTABLE_GIT_SHA"; then
@@ -753,6 +784,7 @@ BALANCE_URL=https://tokeneff.com/api/usb/balance
 PROMO_CODE=
 CONFIG_OVERRIDE=1
 EOF
+printf '%s\n' "$SCRIPT_VERSION" > "$MNT/maker_version"   # 场景③启动器激活上报用（ps1/repair-on-linux.sh 读取）
 
 # ---------------- 8.5 制作时签发 USB token（可选，可跳过；幂等） ----------------
 # 邮箱验证 → 签发 token → 写 config/auth_token；失败不阻塞制作（开机后 welcome.sh 会再引导配置）
@@ -831,12 +863,12 @@ else
     fi
 fi
 
-# 场景③ Windows 在线维修双击入口（P-A A4 双入口投放：AI-Workstation.bat 与 bat 同内容，设计 §9-3）
-for f in repair-on-windows.bat repair-on-windows.ps1 AI-Workstation.bat; do
+# 场景③ 在线维修入口（P-A A4 双入口投放：AI-Workstation.bat 与 bat 同内容，设计 §9-3；1.4.0 加 Linux 入口）
+for f in repair-on-windows.bat repair-on-windows.ps1 AI-Workstation.bat repair-on-linux.sh; do
     if fetch_retry "https://usb.tokeneff.com/maker/$f" "$MNT/$f"; then
-        c_ok "已放入 Windows 在线维修入口: $f"
+        c_ok "已放在线维修入口: $f"
     else
-        c_warn "$f 下载失败（Windows 在线维修入口缺失，不影响 U盘 启动维修）"
+        c_warn "$f 下载失败（在线维修入口缺失，不影响 U盘 启动维修）"
     fi
 done
 
@@ -947,6 +979,20 @@ if [ -n "$CLAUDE_EXE" ]; then
         c_warn "bin/claude.exe 拷贝后校验失败，已移除（不阻断制作）——场景③将回落为在线安装。"
     fi
     c_ok "便携版 claude.exe 已放入 U盘 bin/"
+fi
+# 场景③ Linux 便携引擎 → U盘 bin/（repair-on-linux.sh 读 bin/claude-linux + .sha256 旁车强校验）
+if [ -n "$CLAUDE_LINUX" ]; then
+    mkdir -p "$MNT/bin"
+    echo "    拷入 claude-linux ..."
+    usb_retry "claude-linux" cp "$CLAUDE_LINUX" "$MNT/bin/claude-linux"
+    actual="$(sha256sum "$MNT/bin/claude-linux" | awk '{print $1}')"
+    if [ "${actual,,}" = "${CLAUDE_LINUX_SHA,,}" ]; then
+        printf '%s\n' "$CLAUDE_LINUX_SHA" > "$MNT/bin/claude-linux.sha256"
+        c_ok "bin/claude-linux 盘上复核通过（.sha256 旁车已写）"
+    else
+        rm -f "$MNT/bin/claude-linux" "$MNT/bin/claude-linux.sha256"
+        c_warn "bin/claude-linux 拷贝后校验失败，已移除（不阻断制作）——Linux 启动器将回落本机/在线。"
+    fi
 fi
 if [ -n "$MINGIT_ZIP" ]; then
     mkdir -p "$MNT/bin"
@@ -1059,6 +1105,13 @@ if [ -f "$MNT/repair-on-windows.bat" ]; then
         echo "电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在 Windows 内在线维修/办公（免安装直跑，无需重启）"
     else
         echo "电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在线维修（首次将在线安装 claude）"
+    fi
+fi
+if [ -f "$MNT/repair-on-linux.sh" ]; then
+    if [ -f "$MNT/bin/claude-linux" ]; then
+        echo "电脑还能进 Linux 时: 打开终端，cd 到U盘目录运行 bash repair-on-linux.sh，即可在 Linux 内在线维修/办公（免安装直跑）"
+    else
+        echo "电脑还能进 Linux 时: 打开终端，cd 到U盘目录运行 bash repair-on-linux.sh（首次将在线下载 Linux 版 claude）"
     fi
 fi
 if [ -n "$DEBIAN_ISO" ]; then
