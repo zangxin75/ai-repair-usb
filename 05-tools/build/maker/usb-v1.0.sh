@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.6.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.7.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.6.0（升级直达：检测到成品U盘时三选一菜单默认「无损升级」，升级模式跳过
+# 版本: 1.7.0（升级提速：升级模式两项跳过——①盘上 Ventoy 版本标记与 manifest 一致时
+#       跳过 Ventoy2Disk 刷引导（数据分区根 ventoy_version 标记，第 8 步写入）；
+#       ②盘中同名镜像 sha256 与发布侧钉值一致时跳过整文件重写（Live ISO 1.5GB 大头）。
+#       纯脚本层升级从 8~15 分钟压到 2~3 分钟）
+# 1.6.0（升级直达：检测到成品U盘时三选一菜单默认「无损升级」，升级模式跳过
 #       选盘/清盘确认/组件勾选问答，按盘上现状增量更新；settings.conf 存在即保留不覆盖；
 #       修复结尾使用提示在 umount 后检查 $MNT 恒假的存量 bug）
 # 1.5.0（环境自审）及更早见 git history
@@ -26,7 +30,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.6.0"
+SCRIPT_VERSION="1.7.0"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -489,6 +493,7 @@ PORTABLE_GIT_URL="https://usb.tokeneff.com/downloads/PortableGit-2.56.0.2-64-bit
 PORTABLE_GIT_SHA="8e4cb757edb480c6e94ff3858352c2ea1e431cf5bc15d5df3fd56e2904c18dab"
 
 declare -A LOCAL_FILE=()
+declare -A LOCAL_SHA=()   # 1.7.0：各组件发布侧 sha256（ISO 跳拷判定用）
 for name in ventoy-linux ai-repair-live winpe 'memtest86+'; do
     dl_key="$name"; [ "$name" = "ventoy-linux" ] && dl_key="ventoy"
     url="$(json_get "$name" url)"
@@ -516,6 +521,7 @@ for name in ventoy-linux ai-repair-live winpe 'memtest86+'; do
         sha_check "$dest" "$sha" "$fname"
     fi
     LOCAL_FILE[$dl_key]="$dest"
+    LOCAL_SHA[$dl_key]="${sha:-}"
 done
 
 # ---------------- 6.5 场景③便携运行时：claude.exe + MinGit（可选，失败不阻断） ----------------
@@ -702,8 +708,22 @@ case "${LOCAL_FILE[ventoy]}" in
 esac
 VENTOY_SH="$(find "$VENTOY_DIR" -name 'Ventoy2Disk.sh' | head -n1)"
 [ -n "$VENTOY_SH" ] || die "Ventoy 包内未找到 Ventoy2Disk.sh。" "manifest 指向的 Ventoy 包可能损坏，请联系客服。"
+# 1.7.0 升级提速①：盘上引导层版本标记 = 本版 → 跳过 Ventoy2Disk 写入（省 1~3 分钟）
+# 标记在数据分区根 ventoy_version（第 8 步挂载后写入）；读不到（≤1.6.x 旧盘/只读挂载失败）→ 照常写入
+VENTOY_SKIP=0
+if [ "${UPGRADE_MODE:-0}" = "1" ] && bash "$VENTOY_SH" -l "$TARGET_DEV" >/dev/null 2>&1; then
+    _PROBE_MNT="${WORKDIR}/probe-ventoy"; mkdir -p "$_PROBE_MNT"
+    _PROBE_PART="$(lsblk -n -b -o NAME,SIZE "$TARGET_DEV" | tail -n +2 | sort -k2 -n | tail -n1 | awk '{print $1}')"
+    if [ -n "$_PROBE_PART" ] && mount -o ro "/dev/${_PROBE_PART}" "$_PROBE_MNT" 2>/dev/null; then
+        [ "$(tr -d '[:space:]' < "${_PROBE_MNT}/ventoy_version" 2>/dev/null)" = "$VENTOY_VERSION" ] && VENTOY_SKIP=1
+        umount "$_PROBE_MNT" 2>/dev/null || umount -l "$_PROBE_MNT" 2>/dev/null || true
+    fi
+fi
 # 卸载目标盘上所有已挂载分区，避免写入冲突
 lsblk -n -o MOUNTPOINT "$TARGET_DEV" | grep -v '^$' | while read -r mp; do umount "$mp" || true; done
+if [ "$VENTOY_SKIP" = "1" ]; then
+    c_ok "盘上 Ventoy 引导层已是 v${VENTOY_VERSION}（版本一致，跳过刷写）"
+else
 # 已装 Ventoy → -u 无损升级（数据分区文件与 ISO 全部保留）；未装 → -i 全新安装（GPT + 盘尾保留）
 if bash "$VENTOY_SH" -l "$TARGET_DEV" >/dev/null 2>&1; then
     c_warn "检测到 U盘已安装 Ventoy → 执行无损升级（盘中已有文件与 ISO 将全部保留）"
@@ -729,6 +749,7 @@ wait "$V_PID" \
     || { tail -n 20 "${WORKDIR}/ventoy-cli.log" >&2
          die "Ventoy 写入失败。" "请重新插拔 U盘后重试；若反复失败请换一只 U盘。"; }
 c_ok "Ventoy 引导层写入完成"
+fi
 
 # ---------------- 8. 挂载数据分区，拷入 ISO / ventoy.json / config 骨架 ----------------
 c_step "正在拷入系统镜像与配置 ..."
@@ -847,8 +868,21 @@ copy_progress() {  # $1=src $2=destdir
             || dd if="$1" of="$2/$name" bs=4M status=progress
     fi
 }
+# 1.7.0 升级提速②：盘中同名镜像 sha256 = 发布侧钉值 → 跳过整文件重写（1.5GB 级写入是升级耗时大头）
+# 读校验 ~10-20 秒 vs 重写 3-13 分钟；对不上（含文件缺失）照常重写，不改变既有正确性
+dest_same_as_release() {  # $1=src $2=destdir $3=发布侧sha256；一致返回0
+    local d; d="$2/$(basename "$1")"
+    { [ -n "$3" ] && [ -s "$d" ]; } || return 1
+    echo "    校验盘中已有 $(basename "$1") ..."
+    [ "$(sha256sum "$d" 2>/dev/null | awk '{print $1}')" = "$3" ]
+}
 for name in ai-repair-live winpe 'memtest86+'; do
-    [ -n "${LOCAL_FILE[$name]:-}" ] && usb_retry "镜像 ${name}" copy_progress "${LOCAL_FILE[$name]}" "$MNT/ISO"
+    [ -n "${LOCAL_FILE[$name]:-}" ] || continue
+    if dest_same_as_release "${LOCAL_FILE[$name]}" "$MNT/ISO" "${LOCAL_SHA[$name]:-}"; then
+        c_ok "盘中 $(basename "${LOCAL_FILE[$name]}") 已是最新（跳过重写）"
+        continue
+    fi
+    usb_retry "镜像 ${name}" copy_progress "${LOCAL_FILE[$name]}" "$MNT/ISO"
 done
 # 升级模式：清理旧版维修系统 ISO（新版已拷入；旧版留着白占 ~1.4GB）
 if [ "$UPGRADE_MODE" = "1" ]; then
@@ -862,7 +896,11 @@ fi
 
 # Debian 12 netinst（P-A A4：勾选且下载成功才拷入）
 if [ -n "$DEBIAN_ISO" ]; then
-    usb_retry "Debian 镜像" copy_progress "$DEBIAN_ISO" "$MNT/ISO"
+    if dest_same_as_release "$DEBIAN_ISO" "$MNT/ISO" "$DEBIAN_SHA"; then
+        c_ok "盘中 Debian 镜像已是最新（跳过重写）: ${DEBIAN_NAME}"
+    else
+        usb_retry "Debian 镜像" copy_progress "$DEBIAN_ISO" "$MNT/ISO"
+    fi
     c_ok "已放入 Linux 安装镜像: ${DEBIAN_NAME}"
 fi
 
@@ -908,6 +946,7 @@ CONFIG_OVERRIDE=1
 EOF
 fi
 printf '%s\n' "$SCRIPT_VERSION" > "$MNT/maker_version"   # 场景③启动器激活上报用（ps1/repair-on-linux.sh 读取）
+printf '%s\n' "$VENTOY_VERSION" > "$MNT/ventoy_version"  # 1.7.0 升级提速①：版本一致时下次升级跳过刷引导
 
 # ---------------- 8.5 制作时签发 USB token（可选，可跳过；幂等） ----------------
 # 邮箱验证 → 签发 token → 写 config/auth_token；失败不阻塞制作（开机后 welcome.sh 会再引导配置）

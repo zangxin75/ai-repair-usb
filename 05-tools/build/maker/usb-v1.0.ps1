@@ -1,7 +1,10 @@
-﻿# usb-v1.0.ps1 版本: 1.6.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+﻿# usb-v1.0.ps1 版本: 1.7.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.6.0（与 sh 同版：升级直达——检测到成品U盘时三选一菜单默认「无损升级」，升级模式
+# 版本: 1.7.0（与 sh 同版：升级提速——升级模式两项跳过——①盘上 ventoy_version 标记与
+#       本版一致时跳过 Ventoy2Disk 刷引导（第 9 步挂载后写标记，双侧同名互认）；
+#       ②盘中同名镜像 sha256 与发布侧钉值一致时跳过整文件重写（Live ISO 1.5GB 大头））
+# 1.6.0（与 sh 同版：升级直达——检测到成品U盘时三选一菜单默认「无损升级」，升级模式
 #       跳过选盘/清盘确认/Win镜像/组件勾选问答，按盘上现状增量更新；settings.conf 存在即保留不覆盖）
 # 1.3.7（1.3.7：掉盘鲁棒性——两段式落盘（本机暂存→对账拷贝）、下载缓存保留（换盘重跑免重下）、
 #       掉盘检测+nonce 重定位恢复+三振退出、组件落盘三对账、agents.json 原子写、断盘哨兵改走恢复路径）
@@ -25,7 +28,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.6.0'
+$Script:ScriptVersion   = '1.7.0'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -1041,6 +1044,16 @@ foreach ($win in @(@{key='win10'; flag=$wantWin10; name='Windows 10'}, @{key='wi
     }
 }
 
+# 1.7.0 升级提速②：盘中同名镜像 sha256 = 发布侧钉值 → 跳过整文件重写（Live ISO 1.5GB 大头）
+# 读校验 ~10-20 秒 vs 重写 3-13 分钟；对不上（含缺失）照常重写，不改变既有正确性
+function Test-DestSameAsRelease([string]$SrcPath, [string]$DestDir, [string]$Expected) {
+    if ([string]::IsNullOrEmpty($Expected)) { return $false }
+    $dst = Join-Path $DestDir (Split-Path $SrcPath -Leaf)
+    if (-not (Test-Path -LiteralPath $dst)) { return $false }
+    Write-Host "    校验盘中已有 $(Split-Path $SrcPath -Leaf) ..."
+    return ((Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash -eq $Expected)
+}
+
 # ---------------- 8. 解压 Ventoy 包，CLI 无人值守写入 ----------------
 Write-Step '正在将 Ventoy 引导层写入 U盘...'
 $ventoyZip = $downloads['ventoy']
@@ -1060,6 +1073,19 @@ if ($hasVentoy) {
 } else {
     $ventoyArgs = "VTOYCLI /I /PhyDrive:$($targetDisk.Number) /GPT /R:$($Script:VentoyReserveMB)"
 }
+
+# 1.7.0 升级提速①：盘上 ventoy_version 标记 = 本版 → 跳过 Ventoy2Disk 刷写（省 1~3 分钟）
+# 标记由第 9 步挂载数据分区后写入（sh/ps1 双侧同名互认）；读不到（≤1.6.x 旧盘）→ 照常刷写
+$ventoySkip = $false
+if ($upgradeMode -and $hasVentoy -and (Test-Path -LiteralPath (Join-Path $upgradeRoot 'ventoy_version'))) {
+    if (((Get-Content -LiteralPath (Join-Path $upgradeRoot 'ventoy_version') -Raw) -replace '\s', '') -eq $Script:VentoyVersion) {
+        $ventoySkip = $true
+    }
+}
+if ($ventoySkip) {
+    Write-Ok "盘上 Ventoy 引导层已是 v$($Script:VentoyVersion)（版本一致，跳过刷写）"
+} else {
+
 Write-Host "    执行: Ventoy2Disk.exe $ventoyArgs"
 Write-Host '    正在写入引导层（请勿拔盘）...' -ForegroundColor DarkGray
 
@@ -1100,6 +1126,7 @@ if (-not $ventoyOk) {
     Die "Ventoy 写入失败（cli_done=$($doneTxt.Trim())，退出码 $($proc.ExitCode)）。" '请重新插拔 U盘后重试；若反复失败请换一只 U盘。'
 }
 Write-Ok 'Ventoy 引导层写入完成'
+}
 
 # ---------------- 9. 挂载数据分区，拷入 ISO / ventoy.json / config 骨架 ----------------
 Write-Step '正在拷入系统镜像与配置 ...'
@@ -1125,6 +1152,8 @@ try {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText((Join-Path $Script:UsbRoot $Script:NonceFile), $Script:SessionNonce, $utf8NoBom)
     [IO.File]::WriteAllText((Join-Path $Script:CacheDir 'session-nonce'), $Script:SessionNonce, $utf8NoBom)
+    # 1.7.0 升级提速①：引导层版本标记（与 sh 侧同名互认），下次升级版本一致则跳过刷引导
+    [IO.File]::WriteAllText((Join-Path $Script:UsbRoot 'ventoy_version'), $Script:VentoyVersion, $utf8NoBom)
 } catch { Write-Warn "掉盘标识写入失败（$($_.Exception.Message)）——掉盘后将无法自动续拷，但制作不受影响。" }
 Write-Host ''
 Write-Host '    >>> 接下来开始向 U盘 写入文件，此步最慢（小文件多、U盘 写速有限），请勿拔盘 <<< ' -ForegroundColor Yellow
@@ -1137,6 +1166,10 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Script:UsbRoot 'config') |
 foreach ($name in $selfMadeNames) {
     if ($name -eq 'ventoy' -or -not $downloads.ContainsKey($name)) { continue }
     $src = $downloads[$name]
+    if (Test-DestSameAsRelease $src (Join-Path $Script:UsbRoot 'ISO') (Get-Component $name).sha256) {
+        Write-Ok "盘中 $(Split-Path $src -Leaf) 已是最新（跳过重写）"
+        continue
+    }
     Invoke-UsbCopy -Label "镜像 $name" -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'ISO') }
 }
 # 升级模式：清理旧版维修系统 ISO（新版已拷入；旧版留着白占 ~1.4GB）
@@ -1154,7 +1187,11 @@ foreach ($k in $winIsoLocal.Keys) {
 # Debian 12 netinst（P-A A4：勾选且下载成功才拷入）
 if ($DebianIsoLocal -and (Test-Path $DebianIsoLocal)) {
     $src = $DebianIsoLocal
-    Invoke-UsbCopy -Label "Debian 镜像" -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'ISO') }
+    if (Test-DestSameAsRelease $src (Join-Path $Script:UsbRoot 'ISO') $DebianSha256) {
+        Write-Ok "盘中 Debian 镜像已是最新（跳过重写）: $DebianName"
+    } else {
+        Invoke-UsbCopy -Label "Debian 镜像" -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'ISO') }
+    }
     Write-Ok "已放入 Linux 安装镜像: $DebianName"
 }
 

@@ -247,20 +247,27 @@ grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启�
 grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
 [[ $S73 -eq 1 ]] && ok "启动器 0.5.6：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
 
-# 检查 7-4：制作器版本 1.6.0（四处全改：ps1 头注释+常量、sh 头注释+常量）
+# 检查 7-4：制作器版本 1.7.0（四处全改：ps1 头注释+常量、sh 头注释+常量）
 S74=1
 # 不用 ^ 锚定：ps1 必须带 UTF-8 BOM（PS 5.1 zh-CN 无 BOM 按 GBK 解析必炸，e888564 教训），BOM 在行首
-grep -q "usb-v1.0.ps1 版本: 1.6.0" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 头注释版本未升 1.6.0"; }
-grep -q "ScriptVersion   = '1.6.0'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 常量版本未升 1.6.0"; }
-grep -q "^# usb-v1.0.sh 版本: 1.6.0" "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 头注释版本未升 1.6.0"; }
-grep -q 'SCRIPT_VERSION="1.6.0"' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 常量版本未升 1.6.0"; }
+grep -q "usb-v1.0.ps1 版本: 1.7.0" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 头注释版本未升 1.7.0"; }
+grep -q "ScriptVersion   = '1.7.0'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 常量版本未升 1.7.0"; }
+grep -q "^# usb-v1.0.sh 版本: 1.7.0" "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 头注释版本未升 1.7.0"; }
+grep -q 'SCRIPT_VERSION="1.7.0"' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 常量版本未升 1.7.0"; }
+# 1.7.0 升级提速锚：①Ventoy 版本标记跳刷 ②盘中同名镜像 sha 一致跳重写（双侧对齐）
+grep -q 'dest_same_as_release' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 缺 ISO 跳拷（dest_same_as_release）"; }
+grep -q 'VENTOY_SKIP' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 缺 Ventoy 跳刷（VENTOY_SKIP）"; }
+grep -q 'ventoy_version' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 缺 ventoy_version 标记写入"; }
+grep -q 'Test-DestSameAsRelease' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 缺 ISO 跳拷（Test-DestSameAsRelease）"; }
+grep -q '\$ventoySkip' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 缺 Ventoy 跳刷（ventoySkip）"; }
+grep -q "ventoy_version" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 缺 ventoy_version 标记写入"; }
 # 1.3.5 遗留：codex 拷后改名 codex.exe（robocopy 保留源文件名，不改名最终校验 bin\codex.exe 必炸）
 grep -q "Copy-FileWithProgress \$codexSrc (Join-Path \$Script:UsbRoot 'bin') 'codex.exe'" "$MAKER/usb-v1.0.ps1" \
   || { S74=0; bad "ps1 codex 落盘未改名 codex.exe"; }
 # 三振/降级语义锚：降级分支（确定性失败）保留 Write-Warn + installedFinal = $false，不得被三振 Die 吞掉
 grep -q 'Write-Warn "OpenClaw 落盘失败' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 OpenClaw 降级分支（Write-Warn）缺失"; }
 grep -q 'openclawInstalledFinal = \$false' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 installedFinal = \$false 降级语义缺失"; }
-[[ $S74 -eq 1 ]] && ok "两制作器版本 1.6.0（四处）+ codex 改名 + 降级语义锚"
+[[ $S74 -eq 1 ]] && ok "两制作器版本 1.7.0（四处）+ 升级提速锚（ISO 跳拷/Ventoy 跳刷）+ codex 改名 + 降级语义锚"
 
 # 检查 7-4b：环境自审（1.5.0 / 启动器 0.2.0）——贴错命令/装错场景自动纠偏三端齐备
 S74B=1
