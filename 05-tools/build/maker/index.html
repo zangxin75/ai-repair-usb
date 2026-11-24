@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>AI 维修 U盘 · 修电脑 · 干活 · 装机，一根全包</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=033">
 </head>
 <body>
 
@@ -30,14 +30,16 @@
     </div>
 
     <div id="tab-win" class="tabbody">
+      <p class="cmd-cap">▸ 在 Windows 的 PowerShell 里运行（不是 cmd，不是 Linux 终端）</p>
       <div class="cmd" id="cmd-win">irm https://usb.tokeneff.com/maker/usb-v1.0.ps1 | iex</div>
       <button class="btn copy-cmd" data-target="cmd-win">复制命令</button>
-      <p class="tip">管理员 PowerShell 中粘贴执行。建议 16GB 起步的空白U盘（<b>会被清空</b>，请先备份）；Windows 镜像 + Debian + Codex 全勾选建议 32GB。容量不够？脚本会现场告诉你减掉哪项刚好够，不会做一半失败。</p>
+      <p class="tip">在 <b>Windows 的 PowerShell</b> 窗口粘贴运行——普通窗口即可，随后会弹 UAC 请求管理员权限，点「是」。建议 16GB 起步的空白U盘（<b>会被清空</b>，请先备份）；Windows 镜像 + Debian + Codex 全勾选建议 32GB。容量不够？脚本会现场告诉你减掉哪项刚好够，不会做一半失败。</p>
     </div>
     <div id="tab-linux" class="tabbody hidden">
+      <p class="cmd-cap">▸ 在 Linux / macOS 的终端里运行（Windows 上请用左边 PowerShell 版）</p>
       <div class="cmd" id="cmd-linux">curl -sL https://usb.tokeneff.com/maker/usb-v1.0.sh | sudo bash</div>
       <button class="btn copy-cmd" data-target="cmd-linux">复制命令</button>
-      <p class="tip">想先审阅脚本？<code>curl -sLO …/usb-v1.0.sh &amp;&amp; less usb-v1.0.sh</code></p>
+      <p class="tip">在 <b>Linux / macOS 的终端</b>粘贴运行（需要输入 sudo 密码）。想先审阅脚本？<code>curl -sLO …/usb-v1.0.sh &amp;&amp; less usb-v1.0.sh</code></p>
     </div>
 
     <details id="dl-manual">
@@ -132,6 +134,16 @@
       <p>在同一根 U盘上重跑一次制作命令，把想要的项勾上即可补装；已有的 AI 配置和记录不受影响。</p>
     </details>
     <details>
+      <summary>盘已做好，新功能怎么升级？</summary>
+      <p>同一根 U盘，<b>在你当前系统的窗口里</b>重跑一次制作命令就是升级——制作器认得自己做的盘，会直接弹出「无损升级 / 重新制作 / 退出」三选一，回车即无损升级：跳过全部制盘问答，只更新脚本、AI 引擎和维修系统，凭证与盘中文件全保留。建议在原来那台制作机上跑：下载缓存都在，快。</p>
+      <p class="cmd-cap">▸ Windows 的 PowerShell 里运行</p>
+      <div class="cmd" id="cmd-up-win">irm https://usb.tokeneff.com/maker/usb-v1.0.ps1 | iex</div>
+      <button class="btn copy-cmd" data-target="cmd-up-win">复制命令</button>
+      <p class="cmd-cap">▸ Linux / macOS 的终端里运行</p>
+      <div class="cmd" id="cmd-up-linux">curl -sL https://usb.tokeneff.com/maker/usb-v1.0.sh | sudo bash</div>
+      <button class="btn copy-cmd" data-target="cmd-up-linux">复制命令</button>
+    </details>
+    <details>
       <summary>U盘丢了怎么办？</summary>
       <p>登录 <a href="https://tokeneff.com/login" target="_blank" rel="noopener">tokeneff.com</a> 后在管理页面吊销 Key 即可，他人捡到也无法继续使用。每个 Key 有用量上限，损失有界。</p>
     </details>
@@ -152,6 +164,6 @@
   <div class="fine">遇到问题？重新插拔U盘或联系卖家。</div>
 </footer>
 
-<script src="app.js"></script>
+<script src="app.js?v=033"></script>
 </body>
 </html>

@@ -3,17 +3,37 @@
  * 本页只保留三件事：系统 Tab 切换、复制安装命令、手动组件清单渲染。 */
 
 /* ── Tab 切换（Windows / Linux） ── */
-document.querySelectorAll(".tab").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((b) => {
-      b.classList.toggle("active", b === btn);
-      b.setAttribute("aria-selected", b === btn ? "true" : "false");
-    });
-    document.querySelectorAll(".tabbody").forEach((p) => p.classList.add("hidden"));
-    const panel = document.getElementById("tab-" + btn.dataset.tab);
-    if (panel) panel.classList.remove("hidden");
+function activateTab(name) {
+  const btn = document.querySelector(`.tab[data-tab="${name}"]`);
+  const panel = document.getElementById("tab-" + name);
+  if (!btn || !panel) return;
+  document.querySelectorAll(".tab").forEach((b) => {
+    b.classList.toggle("active", b === btn);
+    b.setAttribute("aria-selected", b === btn ? "true" : "false");
   });
+  document.querySelectorAll(".tabbody").forEach((p) => p.classList.add("hidden"));
+  panel.classList.remove("hidden");
+}
+
+document.querySelectorAll(".tab").forEach((btn) => {
+  btn.addEventListener("click", () => activateTab(btn.dataset.tab));
 });
+
+/* ── 按访客系统自动选中命令（v0.3.2：Windows 用户误抄 Linux 命令 → 自动选中 + 显式标注运行环境） ── */
+(() => {
+  const ua = navigator.userAgent;
+  let tab = null;
+  if (/Windows/i.test(ua)) tab = "win";
+  else if (/Android|iPhone|iPad/i.test(ua)) return; // 手机做不了盘，保持默认
+  else if (/Mac|Linux|X11|CrOS/i.test(ua)) tab = "linux";
+  if (!tab) return;
+  activateTab(tab);
+  const panel = document.getElementById("tab-" + tab);
+  const note = document.createElement("p");
+  note.className = "os-note";
+  note.textContent = "已识别你的系统并自动选中此命令；如果不对，请点上方的标签手动切换。";
+  panel.prepend(note);
+})();
 
 /* ── 复制安装命令 ── */
 document.querySelectorAll(".btn.copy-cmd").forEach((btn) => {

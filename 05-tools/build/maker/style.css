@@ -53,7 +53,7 @@ footer .fine { margin-top: 4px; opacity: .7; }
   transition: color .15s, border-color .15s;
 }
 .tab.active { border-color: var(--acc); color: var(--fg); }
-.tabbody .cmd {
+.cmd {
   background: var(--card); border: 1px solid var(--line); color: #9fe870;
   font: 13px/1.6 ui-monospace, "SF Mono", Consolas, monospace;
   padding: 16px 18px; border-radius: 12px;
@@ -61,6 +61,9 @@ footer .fine { margin-top: 4px; opacity: .7; }
 }
 .tip { color: var(--dim); font-size: .84rem; margin: 10px 0 0; }
 .tip code { background: var(--card); padding: 1px 6px; border-radius: 5px; font-size: .85em; }
+.os-note { color: var(--ok); font-size: .85rem; margin: 0 0 10px; }
+.cmd-cap { color: var(--warn); font-size: .85rem; font-weight: 700; margin: 12px 0 6px; }
+.tabbody .cmd-cap { margin-top: 0; }
 details { margin-top: 28px; }
 summary { cursor: pointer; color: var(--dim); font-size: .88rem; }
 summary:hover { color: var(--acc); }
