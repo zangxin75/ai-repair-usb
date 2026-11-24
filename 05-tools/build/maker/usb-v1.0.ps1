@@ -1,7 +1,10 @@
-﻿# usb-v1.0.ps1 版本: 1.7.0  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+﻿# usb-v1.0.ps1 版本: 1.7.1  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.7.0（与 sh 同版：升级提速——升级模式两项跳过——①盘上 ventoy_version 标记与
+# 版本: 1.7.1（与 sh 同版：升级提速补全——便携运行时同版本跳拷——盘上 bin\*.ver 标记
+#       （claude-win/portablegit/codex）与当前版本一致时跳过解压+重拷，省约 390MB 盘写入；
+#       标记与 sh 侧同名互认，规则同 ventoy_version）
+# 1.7.0（升级提速——升级模式两项跳过——①盘上 ventoy_version 标记与
 #       本版一致时跳过 Ventoy2Disk 刷引导（第 9 步挂载后写标记，双侧同名互认）；
 #       ②盘中同名镜像 sha256 与发布侧钉值一致时跳过整文件重写（Live ISO 1.5GB 大头））
 # 1.6.0（与 sh 同版：升级直达——检测到成品U盘时三选一菜单默认「无损升级」，升级模式
@@ -28,7 +31,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.7.0'
+$Script:ScriptVersion   = '1.7.1'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -51,6 +54,7 @@ $Script:ClaudeGcsBase   = 'https://storage.googleapis.com/claude-code-dist-86c56
 # （官方 PortableGit SFX 解出后重打为 zip，跨平台可解），固定 sha256；升级 = 换 URL+哈希
 $Script:PortableGitUrl    = 'https://usb.tokeneff.com/downloads/PortableGit-2.56.0.2-64-bit.zip'
 $Script:PortableGitSha256 = '8e4cb757edb480c6e94ff3858352c2ea1e431cf5bc15d5df3fd56e2904c18dab'
+$Script:PortableGitVersion = '2.56.0.2'   # 1.7.1：bin\portablegit.ver 跳拷标记比对值
 
 # ---- Ventoy 官方直链动态解析（manifest url 为空时的兜底，§2.5.3-4）----
 # 固定版本号 + 多源候选（GitHub 官方 → 国内加速镜像），发布升级改这里即可。
@@ -897,6 +901,7 @@ if ($wantClaude) {
         $Script:ClaudeExeLocal = Join-Path $claudeDir 'claude.exe'
         Get-FileViaBits -Url "$($Script:ClaudeGcsBase)/$claudeVer/win32-x64/claude.exe" -Dest $Script:ClaudeExeLocal -DisplayName "claude-portable ($claudeVer)"
         Test-FileSha256 -Path $Script:ClaudeExeLocal -Expected $Script:ClaudeExeSha256 -DisplayName "claude.exe ($claudeVer)"
+        $Script:ClaudePortableVer = $claudeVer   # 1.7.1：供 bin\claude-win.ver 跳拷比对
         Write-Ok "便携版 claude.exe 就绪（$claudeVer，官方 sha256 校验通过）"
     } catch {
         Write-Warn "便携版 claude.exe 获取失败（$($_.Exception.Message)）。不阻断制作——场景③双击入口将回落为在线安装。"
@@ -1259,14 +1264,35 @@ foreach ($f in @('repair-on-windows.bat', 'repair-on-windows.ps1', 'AI-Workstati
     }
 }
 
+# 1.7.1 升级提速②：便携运行时同版本跳拷（盘上 bin\*.ver 标记 = 当前版本 → 跳过解压+重拷，
+# 省约 390MB 盘写入；标记与 sh 侧同名互认，规则同 ventoy_version——仅升级模式生效，读不到即照常写）
+function Test-RuntimeVerSkip([string]$MarkerRel, [string]$Expected, [string]$SpotRel) {
+    if (-not $script:upgradeMode -or [string]::IsNullOrWhiteSpace($Expected)) { return $false }
+    if (-not (Test-Path -LiteralPath (Join-Path $Script:UsbRoot $SpotRel))) { return $false }
+    $m = Join-Path $Script:UsbRoot $MarkerRel
+    if (-not (Test-Path -LiteralPath $m)) { return $false }
+    return ((Get-Content -LiteralPath $m -Raw) -replace '\s', '') -eq ($Expected -replace '\s', '')
+}
+function Write-RuntimeVerMarker([string]$MarkerRel, [string]$Value) {
+    try { [IO.File]::WriteAllText((Join-Path $Script:UsbRoot $MarkerRel), $Value, $utf8NoBom) } catch { }
+}
+
 # 场景③便携运行时 → U盘 bin\（claude.exe 直跑 + MinGit 提供 bash；失败已在上游警告跳过）
 if ($Script:ClaudeExeLocal -and (Test-Path $Script:ClaudeExeLocal)) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Script:UsbRoot 'bin') | Out-Null
     $src = $Script:ClaudeExeLocal
-    Invoke-UsbCopy -Label 'claude.exe' -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'bin') }
-    Write-Ok '便携版 claude.exe 已放入 U盘 bin\'
+    if (Test-RuntimeVerSkip 'bin\claude-win.ver' $Script:ClaudePortableVer 'bin\claude.exe') {
+        Write-Ok "盘上 claude.exe 已是 $($Script:ClaudePortableVer)（版本一致，跳过重拷）"
+    } else {
+        Invoke-UsbCopy -Label 'claude.exe' -Action { Copy-FileWithProgress $src (Join-Path $Script:UsbRoot 'bin') }
+        Write-RuntimeVerMarker 'bin\claude-win.ver' $Script:ClaudePortableVer
+        Write-Ok '便携版 claude.exe 已放入 U盘 bin\'
+    }
 }
 if ($MinGitLocal -and (Test-Path $MinGitLocal)) {
+    if (Test-RuntimeVerSkip 'bin\portablegit.ver' $Script:PortableGitVersion 'bin\PortableGit\bin\git.exe') {
+        Write-Ok "盘上便携 Git 已是 v$($Script:PortableGitVersion)（版本一致，跳过解压与重拷）"
+    } else {
     # 1.3.7 两段式：先解压到本机暂存（快、可重试），再整树拷入U盘（掉盘可恢复+对账）
     $gitExtract = Join-Path $Script:ExtractDir 'PortableGit'
     Write-Host '    解压便携 Git（本机暂存）...'
@@ -1277,9 +1303,11 @@ if ($MinGitLocal -and (Test-Path $MinGitLocal)) {
             Copy-TreeWithRecovery -Source $gitExtract -Dest (Join-Path $Script:UsbRoot 'bin\PortableGit') -Label 'PortableGit'
             Assert-TreeSynced -Source $gitExtract -Dest (Join-Path $Script:UsbRoot 'bin\PortableGit') -Label 'PortableGit' -EntryFiles @('bin\git.exe')
         }
+        Write-RuntimeVerMarker 'bin\portablegit.ver' $Script:PortableGitVersion
         Write-Ok '便携 Git 已解压并拷入 U盘 bin\PortableGit'
     } catch {
         Write-Warn "便携 Git 落盘失败（$($_.Exception.Message)）。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+    }
     }
 }
 
@@ -1325,7 +1353,12 @@ if ($Script:CodexExeLocal -and (Test-Path $Script:CodexExeLocal)) {
     try {
         New-Item -ItemType Directory -Force -Path (Join-Path $Script:UsbRoot 'bin') | Out-Null
         $codexSrc = $Script:CodexExeLocal
-        Invoke-UsbCopy -Label 'Codex CLI' -Action { Copy-FileWithProgress $codexSrc (Join-Path $Script:UsbRoot 'bin') 'codex.exe' }
+        if (Test-RuntimeVerSkip 'bin\codex.ver' $codexComponent.version 'bin\codex.exe') {
+            Write-Ok "盘上 codex.exe 已是 $($codexComponent.version)（版本一致，跳过重拷）"
+        } else {
+            Invoke-UsbCopy -Label 'Codex CLI' -Action { Copy-FileWithProgress $codexSrc (Join-Path $Script:UsbRoot 'bin') 'codex.exe' }
+            Write-RuntimeVerMarker 'bin\codex.ver' $codexComponent.version
+        }
         $codexCfgDir = Join-Path $Script:UsbRoot 'config\codex'
         New-Item -ItemType Directory -Force -Path $codexCfgDir | Out-Null
         $configToml = @'

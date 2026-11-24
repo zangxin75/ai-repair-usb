@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.7.0  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.7.1  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.7.0（升级提速：升级模式两项跳过——①盘上 Ventoy 版本标记与 manifest 一致时
+# 版本: 1.7.1（升级提速补全：便携运行时同版本跳拷——盘上 bin/*.ver 标记
+#       （claude-win/claude-linux/portablegit/codex）与当前版本一致时跳过解压+重拷，
+#       省数百 MB 盘写入；标记与 ps1 侧同名互认，规则同 ventoy_version）
+# 1.7.0（升级提速：升级模式两项跳过——①盘上 Ventoy 版本标记与 manifest 一致时
 #       跳过 Ventoy2Disk 刷引导（数据分区根 ventoy_version 标记，第 8 步写入）；
 #       ②盘中同名镜像 sha256 与发布侧钉值一致时跳过整文件重写（Live ISO 1.5GB 大头）。
 #       纯脚本层升级从 8~15 分钟压到 2~3 分钟）
@@ -30,7 +33,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.7.0"
+SCRIPT_VERSION="1.7.1"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -327,6 +330,7 @@ fi
 CODEX_URL="$(json_get codex url)"
 CODEX_FNAME="$(json_get codex filename)"
 CODEX_SHA="$(json_get codex sha256)"
+CODEX_VER="$(json_get codex version)"
 CODEX_AVAILABLE=0; [ -n "$CODEX_URL" ] && CODEX_AVAILABLE=1
 [ "$CODEX_AVAILABLE" = "1" ] || c_warn "Codex CLI 暂不可用（发布清单未提供），本次制作已跳过，不影响其他组件。"
 
@@ -491,6 +495,7 @@ VENTOY_URL_BASE="https://github.com/ventoy/Ventoy/releases/download/v${VENTOY_VE
 CLAUDE_GCS_BASE="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
 PORTABLE_GIT_URL="https://usb.tokeneff.com/downloads/PortableGit-2.56.0.2-64-bit.zip"
 PORTABLE_GIT_SHA="8e4cb757edb480c6e94ff3858352c2ea1e431cf5bc15d5df3fd56e2904c18dab"
+PORTABLE_GIT_VERSION="2.56.0.2"   # 1.7.1：bin/portablegit.ver 跳拷标记比对值
 
 declare -A LOCAL_FILE=()
 declare -A LOCAL_SHA=()   # 1.7.0：各组件发布侧 sha256（ISO 跳拷判定用）
@@ -1060,11 +1065,26 @@ if [ "$WANT_CLAUDE" = "1" ]; then
     fi
 fi
 
+# 1.7.1 升级提速②：便携运行时同版本跳拷（盘上 bin/*.ver 标记 = 当前版本 → 跳过解压+重拷；
+# 仅升级模式生效，读不到（旧盘）→ 照常写；标记与 ps1 侧同名互认，规则同 ventoy_version）
+ver_skip() {  # $1=标记相对路径 $2=期望版本 $3=抽查文件相对路径
+    [ "$UPGRADE_MODE" = "1" ] || return 1
+    [ -n "$2" ] || return 1
+    [ -e "$MNT/$3" ] || return 1
+    [ "$(tr -d '[:space:]' < "$MNT/$1" 2>/dev/null)" = "$(printf '%s' "$2" | tr -d '[:space:]')" ]
+}
+ver_mark() { printf '%s\n' "$2" > "$MNT/$1"; }
+
 # Codex CLI 落盘（P-A A3/A4：bin/codex.exe + config/codex/config.toml）
 CODEX_INSTALLED=0
 if [ -n "$CODEX_EXE" ]; then
     mkdir -p "$MNT/bin" "$MNT/config/codex"
-    usb_retry "Codex CLI" cp "$CODEX_EXE" "$MNT/bin/codex.exe"
+    if ver_skip bin/codex.ver "$CODEX_VER" bin/codex.exe; then
+        c_ok "盘上 codex.exe 已是 ${CODEX_VER}（版本一致，跳过重拷）"
+    else
+        usb_retry "Codex CLI" cp "$CODEX_EXE" "$MNT/bin/codex.exe"
+        ver_mark bin/codex.ver "$CODEX_VER"
+    fi
     cat > "$MNT/config/codex/config.toml" <<'TOML'
 # Codex CLI 配置（制作器生成；AI 维修U盘 P-A）
 model_provider = "tokeneff"
@@ -1131,41 +1151,56 @@ fi
 # 场景③便携运行时 → U盘 bin\（claude.exe 直跑 + MinGit 提供 bash）
 if [ -n "$CLAUDE_EXE" ]; then
     mkdir -p "$MNT/bin"
-    echo "    拷入 claude.exe ..."
-    usb_retry "claude.exe" cp "$CLAUDE_EXE" "$MNT/bin/claude.exe"
-    actual="$(sha256sum "$MNT/bin/claude.exe" | awk '{print $1}')"
-    if [ "${actual,,}" = "${CLAUDE_SHA,,}" ]; then
-        c_ok "bin/claude.exe 盘上复核通过"
+    if ver_skip bin/claude-win.ver "$CLAUDE_VER" bin/claude.exe; then
+        c_ok "盘上 claude.exe 已是 ${CLAUDE_VER}（版本一致，跳过重拷）"
     else
-        rm -f "$MNT/bin/claude.exe"
-        c_warn "bin/claude.exe 拷贝后校验失败，已移除（不阻断制作）——场景③将回落为在线安装。"
+        echo "    拷入 claude.exe ..."
+        usb_retry "claude.exe" cp "$CLAUDE_EXE" "$MNT/bin/claude.exe"
+        actual="$(sha256sum "$MNT/bin/claude.exe" | awk '{print $1}')"
+        if [ "${actual,,}" = "${CLAUDE_SHA,,}" ]; then
+            c_ok "bin/claude.exe 盘上复核通过"
+            ver_mark bin/claude-win.ver "$CLAUDE_VER"
+        else
+            rm -f "$MNT/bin/claude.exe"
+            c_warn "bin/claude.exe 拷贝后校验失败，已移除（不阻断制作）——场景③将回落为在线安装。"
+        fi
+        c_ok "便携版 claude.exe 已放入 U盘 bin/"
     fi
-    c_ok "便携版 claude.exe 已放入 U盘 bin/"
 fi
 # 场景③ Linux 便携引擎 → U盘 bin/（repair-on-linux.sh 读 bin/claude-linux + .sha256 旁车强校验）
 if [ -n "$CLAUDE_LINUX" ]; then
     mkdir -p "$MNT/bin"
-    echo "    拷入 claude-linux ..."
-    usb_retry "claude-linux" cp "$CLAUDE_LINUX" "$MNT/bin/claude-linux"
-    actual="$(sha256sum "$MNT/bin/claude-linux" | awk '{print $1}')"
-    if [ "${actual,,}" = "${CLAUDE_LINUX_SHA,,}" ]; then
-        printf '%s\n' "$CLAUDE_LINUX_SHA" > "$MNT/bin/claude-linux.sha256"
-        c_ok "bin/claude-linux 盘上复核通过（.sha256 旁车已写）"
+    if ver_skip bin/claude-linux.ver "$CLAUDE_VER" bin/claude-linux; then
+        c_ok "盘上 claude-linux 已是 ${CLAUDE_VER}（版本一致，跳过重拷）"
     else
-        rm -f "$MNT/bin/claude-linux" "$MNT/bin/claude-linux.sha256"
-        c_warn "bin/claude-linux 拷贝后校验失败，已移除（不阻断制作）——Linux 启动器将回落本机/在线。"
+        echo "    拷入 claude-linux ..."
+        usb_retry "claude-linux" cp "$CLAUDE_LINUX" "$MNT/bin/claude-linux"
+        actual="$(sha256sum "$MNT/bin/claude-linux" | awk '{print $1}')"
+        if [ "${actual,,}" = "${CLAUDE_LINUX_SHA,,}" ]; then
+            printf '%s\n' "$CLAUDE_LINUX_SHA" > "$MNT/bin/claude-linux.sha256"
+            ver_mark bin/claude-linux.ver "$CLAUDE_VER"
+            c_ok "bin/claude-linux 盘上复核通过（.sha256 旁车已写）"
+        else
+            rm -f "$MNT/bin/claude-linux" "$MNT/bin/claude-linux.sha256"
+            c_warn "bin/claude-linux 拷贝后校验失败，已移除（不阻断制作）——Linux 启动器将回落本机/在线。"
+        fi
     fi
 fi
 if [ -n "$MINGIT_ZIP" ]; then
     mkdir -p "$MNT/bin"
-    GIT_STAGE="${WORKDIR}/extract/PortableGit"
-    echo "    解压便携 Git（本机暂存）..."
-    if extract_progress "便携 Git" "$GIT_STAGE" unzip -qo "$MINGIT_ZIP" -d "$GIT_STAGE" \
-        && rm -rf "$MNT/bin/PortableGit" \
-        && usb_tree_copy "$GIT_STAGE" "$MNT/bin/PortableGit" "便携 Git" "bin/git.exe"; then
-        c_ok "便携 Git 已落盘到 U盘 bin/PortableGit"
+    if ver_skip bin/portablegit.ver "$PORTABLE_GIT_VERSION" bin/PortableGit/bin/git.exe; then
+        c_ok "盘上便携 Git 已是 v${PORTABLE_GIT_VERSION}（版本一致，跳过解压与重拷）"
     else
-        c_warn "便携 Git 落盘失败，已跳过（不阻断制作）"
+        GIT_STAGE="${WORKDIR}/extract/PortableGit"
+        echo "    解压便携 Git（本机暂存）..."
+        if extract_progress "便携 Git" "$GIT_STAGE" unzip -qo "$MINGIT_ZIP" -d "$GIT_STAGE" \
+            && rm -rf "$MNT/bin/PortableGit" \
+            && usb_tree_copy "$GIT_STAGE" "$MNT/bin/PortableGit" "便携 Git" "bin/git.exe"; then
+            ver_mark bin/portablegit.ver "$PORTABLE_GIT_VERSION"
+            c_ok "便携 Git 已落盘到 U盘 bin/PortableGit"
+        else
+            c_warn "便携 Git 落盘失败，已跳过（不阻断制作）"
+        fi
     fi
 fi
 
