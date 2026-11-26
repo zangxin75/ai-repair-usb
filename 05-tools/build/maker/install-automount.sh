@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# AI 维修 U盘 · Linux 自动挂载安装器 v1.0.0
+# AI 维修 U盘 · Linux 自动挂载安装器 v1.0.1
+# v1.0.1：挂载旗标安全加固——umask 000→022（不再世界可写）+ 全分支补 nosuid,nodev（防盘上
+#          setuid/设备节点在主机侧生效）；仍为 mount-only，不执行盘上任何脚本。
 # 在 Linux 主机上以 root 运行一次：此后插入卷标为 Ventoy 的U盘数据分区即自动挂载到 /media/ventoy。
 # 仅自动挂载，不执行盘上任何脚本。桌面版发行版本就会自动挂载，本脚本主要服务服务器 / 最小化系统。
 # 用法: curl -sL https://usb.tokeneff.com/maker/install-automount.sh | sudo bash
@@ -24,10 +26,10 @@ if command -v findmnt >/dev/null 2>&1 && findmnt -rn -S "$DEV" | grep -q .; then
 # exfat/vfat/ntfs 用 uid/gid 让桌面用户可读写；其他文件系统或拿不到用户时直接挂
 U="$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd)"
 if [ -n "$U" ] && id "$U" >/dev/null 2>&1; then
-    mount -o "noatime,uid=$(id -u "$U"),gid=$(id -g "$U"),umask=000" "$DEV" "$MNT" 2>/dev/null \
-        || mount -o noatime "$DEV" "$MNT" 2>/dev/null || true
+    mount -o "noatime,nosuid,nodev,uid=$(id -u "$U"),gid=$(id -g "$U"),umask=022" "$DEV" "$MNT" 2>/dev/null \
+        || mount -o noatime,nosuid,nodev,umask=022 "$DEV" "$MNT" 2>/dev/null || true
 else
-    mount -o noatime "$DEV" "$MNT" 2>/dev/null || true
+    mount -o noatime,nosuid,nodev,umask=022 "$DEV" "$MNT" 2>/dev/null || true
 fi
 exit 0
 EOF

@@ -1,8 +1,22 @@
 #!/usr/bin/env bash
-# usb-v1.0.sh 版本: 1.7.1  (AI 电脑维修 U盘 一键制作器 · Linux 端)
+# usb-v1.0.sh 版本: 1.7.5  (AI 电脑维修 U盘 一键制作器 · Linux 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.7.1（升级提速补全：便携运行时同版本跳拷——盘上 bin/*.ver 标记
+# 版本: 1.7.5（code-review 修复全清——①sh 补升级防误清守卫（无 Ventoy 卷标即中止，
+#       与 ps1 同构）+双侧文案引导改回卷标；②fetch_verified 下载校验封装：毒缓存单轮
+#       自愈对齐 ps1，可选组件 sha 失败不再被 die 打死降级分支；③usb_place_file/ps1
+#       入口同盘 ai-part 暂存+原子改名（中断不留半截）；④agents.json CLAUDE_INSTALLED
+#       挂盘上复核结果；⑤升级下载失败沿用盘上版不隐藏入口；⑥ver_mark 写失败容错）
+# 1.7.4（便携运行时跳拷补漏：Node/OpenClaw/Pi 纳入 bin/*.ver 同版本跳过——
+#       1.7.1 只做了 claude-win/claude-linux/portablegit/codex 四件，P-B 三件升级时
+#       每次白解压+重拷（Node ~110MB、OpenClaw ~380MB、Pi ~90MB 盘写入）；双侧同名互认）
+# 1.7.3（code-review 审计修复——①三处 pipefail 致命点：nonce 有界输入、umount
+#       零挂载 || true、进度 PCT 兜底；②manifest 取 sha 失败改告警跳过不再打死制作；
+#       ③小文件投放先暂存再落盘（失败不残留 U盘）+ .ps1 补 BOM；④邮箱 JSON 走安全
+#       构造器；⑤便携 claude.exe 成功提示移入复核通过分支）
+# 1.7.2（与 ps1 同版：补齐双侧投放对称缺口——ps1 此前不写 maker_version、不投放
+#       repair-on-linux.sh；sh 侧两处本就具备，仅版本号对齐）
+# 1.7.1（升级提速补全：便携运行时同版本跳拷——盘上 bin/*.ver 标记
 #       （claude-win/claude-linux/portablegit/codex）与当前版本一致时跳过解压+重拷，
 #       省数百 MB 盘写入；标记与 ps1 侧同名互认，规则同 ventoy_version）
 # 1.7.0（升级提速：升级模式两项跳过——①盘上 Ventoy 版本标记与 manifest 一致时
@@ -33,7 +47,7 @@
 set -euo pipefail
 
 # ---------------- 全局常量（集中定义） ----------------
-SCRIPT_VERSION="1.7.1"
+SCRIPT_VERSION="1.7.5"
 MANIFEST_URL="https://usb.tokeneff.com/maker/manifest.json"   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 MIN_BASE_GB=5   # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量；勾选项在勾选后动态复查
 HTTP_TIMEOUT=30
@@ -292,6 +306,14 @@ SIZE_GB=$((SIZE_BYTES / 1024 / 1024 / 1024))
 [ "$SIZE_GB" -ge "$MIN_BASE_GB" ] \
     || die "所选 U盘 容量约 ${SIZE_GB}GB，小于最低要求 ${MIN_BASE_GB}GB。" "请更换容量 ≥${MIN_BASE_GB}GB（推荐 128GB）的 U盘 后重新运行。"
 
+# 1.7.5 防误清：成品盘识别只看入口文件（audit_find_usbs），手拷入口脚本到普通U盘会被误判为成品盘
+# → 升级模式强制目标盘带 Ventoy 卷标（真成品盘恒有）；否则后续 Ventoy 探测失败会走 -i 整盘重建、
+# 清掉用户数据——与 ps1 侧守卫同构（1.7.3 ④ 只修了单侧）
+if [ "$UPGRADE_MODE" = "1" ] && ! lsblk -n -o LABEL "$TARGET_DEV" | grep -qx 'Ventoy'; then
+    die "目标盘没有 Ventoy 卷，不是本项目成品U盘（可能只是拷入了入口脚本）。" \
+        "为防误清数据已中止。若确为本项目成品盘且改过卷标，请将数据分区卷标改回 Ventoy 后重试；若确实要重新制作此盘，请重新运行并选「重新制作」。"
+fi
+
 # ---------------- 4.5 --agents 参数解析（P-A A4：参数优先，缺省逐项问答） ----------------
 AGENTS_ARG=""
 for ((ai=1; ai<=$#; ai++)); do
@@ -470,6 +492,33 @@ sha_check() {  # $1=file $2=expected $3=display
     c_ok "$3 校验通过"
 }
 
+# 1.7.5：软校验 + 下载校验封装（与 ps1 Get-FileVerifiedViaBits 对齐）——
+# 可选组件的 else 降级分支要求 sha 失败可返回，不能像 sha_check 那样 die 打死整轮
+sha_check_soft() {  # $1=file $2=expected $3=display — 失败仅删坏文件返回 1，不 die
+    [ -n "$2" ] || { c_warn "$3 未提供 SHA256，跳过校验（manifest 占位阶段）"; return 0; }
+    local actual
+    actual="$(sha256sum "$1" | awk '{print $1}')" || return 1
+    [ "${actual,,}" = "${2,,}" ] && return 0
+    rm -f "$1"
+    return 1
+}
+
+fetch_verified() {  # $1=url $2=dest $3=sha $4=display — 下载+校验一体：
+    # 校验失败（坏文件已删）后干净重下一次再复验；任一失败清半成品返回 1（调用点 c_warn 降级）。
+    # 毒缓存成因：Range 续传把旧半截与新内容拼接——净重下不再续传即自愈
+    if ! fetch_retry "$1" "$2"; then
+        rm -f "$2"
+        return 1
+    fi
+    sha_check_soft "$2" "$3" "$4" && return 0
+    c_warn "$4 校验失败（坏文件已删），重新完整下载一次..."
+    if ! fetch_retry "$1" "$2"; then
+        rm -f "$2"
+        return 1
+    fi
+    sha_check_soft "$2" "$3" "$4" || { rm -f "$2"; return 1; }
+}
+
 # 后台解压 + 心跳进度（1.3.1）：目标多为 exFAT U盘，几万小文件解压动辄十几分钟，
 # 无进度会被当成假死。用法: extract_progress <标签> <目标目录> <命令...>（返回命令退出码）
 extract_progress() {
@@ -533,7 +582,7 @@ done
 # U盘 bin\ 内置后，任意 Windows 双击 repair-on-windows.bat 免安装直跑；
 # 失败只警告：双击入口自动回落在线安装（方案 5.3 降级链不变）。
 # P-A A4：按勾选裁剪——claude 仅勾选时下载；PortableGit 为 claude/codex 共用，任一勾选即安装
-CLAUDE_EXE=""; CLAUDE_SHA=""
+CLAUDE_EXE=""; CLAUDE_SHA=""; CLAUDE_OK=0   # 1.7.5：CLAUDE_OK=盘上 claude.exe 为本版复核通过/在位（agents.json 依据）
 MINGIT_ZIP=""
 mkdir -p "${CACHE}/portable-bin"
 if [ "$WANT_CLAUDE" != "1" ]; then
@@ -542,24 +591,20 @@ elif CLAUDE_VER="$(fetch_retry "${CLAUDE_GCS_BASE}/stable" - | tr -d '[:space:]'
     CLAUDE_MANIFEST="${CLAUDE_GCS_BASE}/${CLAUDE_VER}/manifest.json"
     # 1.4.0 修复活 bug：官方 manifest 实为多行 pretty-print，旧同行匹配模式恒输出空
     # → CLAUDE_SHA 空 → 便携 claude.exe 从 1.2.x 起被静默永久跳过。改块内范围模式。
-    CLAUDE_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n '/"win32-x64":/,/}/s/.*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)"
+    # 1.7.3：|| CLAUDE_SHA="" 防 pipefail 误杀——fetch_retry 3 次失败时裸赋值会让 set -e
+    # 打死整轮制作（manifest 单独失败本应走下方 [ -z ] 告警跳过，不阻断）
+    CLAUDE_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n '/"win32-x64":/,/}/s/.*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)" || CLAUDE_SHA=""
     if [ -z "$CLAUDE_SHA" ]; then
         c_warn "无法从官方 manifest 取得 win32-x64 checksum，跳过便携版 claude.exe（不阻断制作）。"
     elif cache_hit "${CACHE}/portable-bin/claude.exe" "$CLAUDE_SHA"; then
         CLAUDE_EXE="${CACHE}/portable-bin/claude.exe"
         c_ok "缓存命中: claude.exe（跳过下载，官方 sha256 校验通过）"
-    elif fetch_retry "${CLAUDE_GCS_BASE}/${CLAUDE_VER}/win32-x64/claude.exe" "${CACHE}/portable-bin/TempClaude.exe"; then
-        actual="$(sha256sum "${CACHE}/portable-bin/TempClaude.exe" | awk '{print $1}')"
-        if [ "${actual,,}" = "${CLAUDE_SHA,,}" ]; then
-            mv "${CACHE}/portable-bin/TempClaude.exe" "${CACHE}/portable-bin/claude.exe"
-            CLAUDE_EXE="${CACHE}/portable-bin/claude.exe"
-            c_ok "便携版 claude.exe 就绪（${CLAUDE_VER}，官方 sha256 校验通过）"
-        else
-            rm -f "${CACHE}/portable-bin/TempClaude.exe"
-            c_warn "便携版 claude.exe sha256 校验失败，已跳过（不阻断制作）——场景③将回落为在线安装。"
-        fi
+    elif fetch_verified "${CLAUDE_GCS_BASE}/${CLAUDE_VER}/win32-x64/claude.exe" "${CACHE}/portable-bin/TempClaude.exe" "$CLAUDE_SHA" "claude.exe"; then
+        mv "${CACHE}/portable-bin/TempClaude.exe" "${CACHE}/portable-bin/claude.exe"
+        CLAUDE_EXE="${CACHE}/portable-bin/claude.exe"
+        c_ok "便携版 claude.exe 就绪（${CLAUDE_VER}，官方 sha256 校验通过）"
     else
-        c_warn "便携版 claude.exe 下载失败。不阻断制作——场景③双击入口将回落为在线安装。"
+        c_warn "便携版 claude.exe 获取失败（下载/校验）。不阻断制作——场景③双击入口将回落为在线安装。"
     fi
 else
     c_warn "Claude Code 官方分发桶不可达，跳过便携版 claude.exe（不阻断制作）。"
@@ -572,24 +617,18 @@ if [ "$WANT_CLAUDE" != "1" ]; then
 elif [ -z "${CLAUDE_VER:-}" ] || [ -z "${CLAUDE_MANIFEST:-}" ]; then
     c_warn "官方分发桶不可达（上步已警告），跳过 claude-linux 下载（不阻断制作）——Linux 启动器将回落本机/在线。"
 else
-    CLAUDE_LINUX_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n '/"linux-x64":/,/}/s/.*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)"
+    CLAUDE_LINUX_SHA="$(fetch_retry "$CLAUDE_MANIFEST" - | sed -n '/"linux-x64":/,/}/s/.*"checksum": "\([0-9a-f]*\)".*/\1/p' | head -n1)" || CLAUDE_LINUX_SHA=""   # 1.7.3 同上：防 pipefail 误杀
     if [ -z "$CLAUDE_LINUX_SHA" ]; then
         c_warn "无法从官方 manifest 取得 linux-x64 checksum，跳过便携 claude-linux（不阻断制作）。"
     elif cache_hit "${CACHE}/portable-bin/claude-linux" "$CLAUDE_LINUX_SHA"; then
         CLAUDE_LINUX="${CACHE}/portable-bin/claude-linux"
         c_ok "缓存命中: claude-linux（跳过下载，官方 sha256 校验通过）"
-    elif fetch_retry "${CLAUDE_GCS_BASE}/${CLAUDE_VER}/linux-x64/claude" "${CACHE}/portable-bin/TempClaudeLinux"; then
-        actual="$(sha256sum "${CACHE}/portable-bin/TempClaudeLinux" | awk '{print $1}')"
-        if [ "${actual,,}" = "${CLAUDE_LINUX_SHA,,}" ]; then
-            mv "${CACHE}/portable-bin/TempClaudeLinux" "${CACHE}/portable-bin/claude-linux"
-            CLAUDE_LINUX="${CACHE}/portable-bin/claude-linux"
-            c_ok "便携版 claude-linux 就绪（${CLAUDE_VER}，官方 sha256 校验通过）"
-        else
-            rm -f "${CACHE}/portable-bin/TempClaudeLinux"
-            c_warn "便携版 claude-linux sha256 校验失败，已跳过（不阻断制作）——Linux 启动器将回落本机/在线。"
-        fi
+    elif fetch_verified "${CLAUDE_GCS_BASE}/${CLAUDE_VER}/linux-x64/claude" "${CACHE}/portable-bin/TempClaudeLinux" "$CLAUDE_LINUX_SHA" "claude-linux"; then
+        mv "${CACHE}/portable-bin/TempClaudeLinux" "${CACHE}/portable-bin/claude-linux"
+        CLAUDE_LINUX="${CACHE}/portable-bin/claude-linux"
+        c_ok "便携版 claude-linux 就绪（${CLAUDE_VER}，官方 sha256 校验通过）"
     else
-        c_warn "便携版 claude-linux 下载失败。不阻断制作——Linux 启动器将回落本机/在线。"
+        c_warn "便携版 claude-linux 获取失败（下载/校验）。不阻断制作——Linux 启动器将回落本机/在线。"
     fi
 fi
 if [ "$WANT_CLAUDE" = "1" ] || [ "$WANT_CODEX" = "1" ]; then
@@ -598,18 +637,12 @@ if [ "$WANT_CLAUDE" = "1" ] || [ "$WANT_CODEX" = "1" ]; then
         c_ok "缓存命中: PortableGit.zip（跳过下载，自托管 sha256 校验通过）"
     else
         echo "    便携 Git（Bash 工具依赖，约 154MB）..."
-        if fetch_retry "$PORTABLE_GIT_URL" "${CACHE}/portable-bin/TempPortableGit.zip"; then
-            actual="$(sha256sum "${CACHE}/portable-bin/TempPortableGit.zip" | awk '{print $1}')"
-            if [ "${actual,,}" = "${PORTABLE_GIT_SHA,,}" ]; then
-                mv "${CACHE}/portable-bin/TempPortableGit.zip" "${CACHE}/portable-bin/PortableGit.zip"
-                MINGIT_ZIP="${CACHE}/portable-bin/PortableGit.zip"
-                c_ok "便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）"
-            else
-                rm -f "${CACHE}/portable-bin/TempPortableGit.zip"
-                c_warn "便携 Git sha256 校验失败，已跳过（不阻断制作）——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
-            fi
+        if fetch_verified "$PORTABLE_GIT_URL" "${CACHE}/portable-bin/TempPortableGit.zip" "$PORTABLE_GIT_SHA" "PortableGit.zip"; then
+            mv "${CACHE}/portable-bin/TempPortableGit.zip" "${CACHE}/portable-bin/PortableGit.zip"
+            MINGIT_ZIP="${CACHE}/portable-bin/PortableGit.zip"
+            c_ok "便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）"
         else
-            c_warn "便携 Git 下载失败。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
+            c_warn "便携 Git 获取失败（下载/校验）。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
         fi
     fi
 else
@@ -624,8 +657,7 @@ if [ "$WANT_CODEX" = "1" ] && [ "$CODEX_AVAILABLE" = "1" ]; then
         c_ok "缓存命中: ${CODEX_FNAME}（跳过下载，发布侧 sha256 校验通过）"
     else
         echo "    Codex CLI（${CODEX_FNAME}，约 334MB）..."
-        if fetch_retry "$CODEX_URL" "${CACHE}/codex-download.exe" \
-            && sha_check "${CACHE}/codex-download.exe" "$CODEX_SHA" "$CODEX_FNAME"; then
+        if fetch_verified "$CODEX_URL" "${CACHE}/codex-download.exe" "$CODEX_SHA" "$CODEX_FNAME"; then
             mv "${CACHE}/codex-download.exe" "${CACHE}/${CODEX_FNAME}"
             CODEX_EXE="${CACHE}/${CODEX_FNAME}"
             c_ok "Codex CLI 就绪（发布侧 sha256 校验通过）"
@@ -644,8 +676,7 @@ if [ "$WANT_DEBIAN" = "1" ]; then
         c_ok "缓存命中: ${DEBIAN_NAME}（跳过下载，官方 SHA256SUMS 钉值校验通过）"
     else
         echo "    Debian 12 netinst（${DEBIAN_NAME}，官方 cdimage 存档直链，约 650MB）..."
-        if fetch_retry "$DEBIAN_URL" "${CACHE}/${DEBIAN_NAME}" \
-            && sha_check "${CACHE}/${DEBIAN_NAME}" "$DEBIAN_SHA" "$DEBIAN_NAME"; then
+        if fetch_verified "$DEBIAN_URL" "${CACHE}/${DEBIAN_NAME}" "$DEBIAN_SHA" "$DEBIAN_NAME"; then
             DEBIAN_ISO="${CACHE}/${DEBIAN_NAME}"
             c_ok "Debian 12 netinst 就绪（官方 SHA256SUMS 钉值校验通过）"
         else
@@ -662,8 +693,7 @@ if [ "$WANT_NODE" = "1" ] && [ "$NODE_AVAILABLE" = "1" ]; then
         c_ok "缓存命中: ${NODE_FNAME}（跳过下载，官方 SHASUMS 钉值校验通过）"
     else
         echo "    便携 Node ${NODE_VER}（${NODE_FNAME}，约 36MB zip）..."
-        if fetch_retry "$NODE_URL" "${CACHE}/${NODE_FNAME}" \
-            && sha_check "${CACHE}/${NODE_FNAME}" "$NODE_SHA" "$NODE_FNAME"; then
+        if fetch_verified "$NODE_URL" "${CACHE}/${NODE_FNAME}" "$NODE_SHA" "$NODE_FNAME"; then
             NODE_TAR="${CACHE}/${NODE_FNAME}"
             c_ok "便携 Node 运行时就绪（官方 SHASUMS 钉值校验通过）"
         else
@@ -677,8 +707,7 @@ if [ "$WANT_OPENCLAW" = "1" ] && [ "$OC_AVAILABLE" = "1" ]; then
         c_ok "缓存命中: ${OC_FNAME}（跳过下载，发布侧 sha256 校验通过）"
     else
         echo "    OpenClaw ${OC_VER} 预装包（${OC_FNAME}，约 154MB tar.gz）..."
-        if fetch_retry "$OC_URL" "${CACHE}/${OC_FNAME}" \
-            && sha_check "${CACHE}/${OC_FNAME}" "$OC_SHA" "$OC_FNAME"; then
+        if fetch_verified "$OC_URL" "${CACHE}/${OC_FNAME}" "$OC_SHA" "$OC_FNAME"; then
             OC_TAR="${CACHE}/${OC_FNAME}"
             c_ok "OpenClaw 预装包就绪（发布侧 sha256 校验通过）"
         else
@@ -692,8 +721,7 @@ if [ "$WANT_PI" = "1" ] && [ "$PI_AVAILABLE" = "1" ]; then
         c_ok "缓存命中: ${PI_FNAME}（跳过下载，发布侧 sha256 校验通过）"
     else
         echo "    Pi ${PI_VER} 预装包（${PI_FNAME}，约 33MB tar.gz）..."
-        if fetch_retry "$PI_URL" "${CACHE}/${PI_FNAME}" \
-            && sha_check "${CACHE}/${PI_FNAME}" "$PI_SHA" "$PI_FNAME"; then
+        if fetch_verified "$PI_URL" "${CACHE}/${PI_FNAME}" "$PI_SHA" "$PI_FNAME"; then
             PI_TAR="${CACHE}/${PI_FNAME}"
             c_ok "Pi 预装包就绪（发布侧 sha256 校验通过）"
         else
@@ -725,7 +753,8 @@ if [ "${UPGRADE_MODE:-0}" = "1" ] && bash "$VENTOY_SH" -l "$TARGET_DEV" >/dev/nu
     fi
 fi
 # 卸载目标盘上所有已挂载分区，避免写入冲突
-lsblk -n -o MOUNTPOINT "$TARGET_DEV" | grep -v '^$' | while read -r mp; do umount "$mp" || true; done
+# 零挂载分区时 grep 无匹配退 1 → pipefail 会误杀，|| true 兜底（umount 自身失败已在循环内兜底）
+lsblk -n -o MOUNTPOINT "$TARGET_DEV" | grep -v '^$' | while read -r mp; do umount "$mp" || true; done || true
 if [ "$VENTOY_SKIP" = "1" ]; then
     c_ok "盘上 Ventoy 引导层已是 v${VENTOY_VERSION}（版本一致，跳过刷写）"
 else
@@ -743,7 +772,8 @@ V_PID=$!
 ELAPSED=0; PCT=0
 while kill -0 "$V_PID" 2>/dev/null; do
     sleep 1; ELAPSED=$((ELAPSED + 1))
-    PCT=$(grep -o '[0-9]\{1,3\}%' "${WORKDIR}/ventoy-cli.log" 2>/dev/null | tail -n1 | tr -d '%')
+    # 首轮日志尚无 % 行时 grep 退 1 → pipefail 会误杀，|| PCT=0 兜底（下方空值守卫保留）
+    PCT=$(grep -o '[0-9]\{1,3\}%' "${WORKDIR}/ventoy-cli.log" 2>/dev/null | tail -n1 | tr -d '%') || PCT=0
     [ -n "$PCT" ] || PCT=0
     FILL=$((PCT / 4)); [ "$FILL" -gt 25 ] && FILL=25
     BAR=$(printf '%*s' "$FILL" '' | tr ' ' '#')$(printf '%*s' $((25 - FILL)) '' | tr ' ' '.')
@@ -855,7 +885,8 @@ usb_tree_copy() {  # $1=src $2=dst $3=label $4=入口相对路径(空格分隔)
 }
 
 # 掉盘标识：Ventoy 已写完、数据分区已挂载 → 写 nonce（全新 -i 会清盘，故必须此刻才写）
-SESSION_NONCE="$(tr -dc 'a-f0-9' < /dev/urandom | head -c 32)"
+# 有界输入在前、head 不再半路退（无限 urandom 喂 head 会让 tr 吃 SIGPIPE→141→pipefail 误杀本行）
+SESSION_NONCE="$(head -c 4096 /dev/urandom | tr -dc 'a-f0-9' | cut -c1-32)"
 printf '%s' "$SESSION_NONCE" > "$MNT/$NONCE_FILE"
 printf '%s' "$SESSION_NONCE" > "${CACHE}/session-nonce"
 
@@ -969,6 +1000,14 @@ usb_verify_body() {  # $1=email $2=code $3=password → verify 请求体（jq/py
     fi
 }
 
+usb_email_body() {  # $1=email → request-code 请求体（与 usb_verify_body 同构造器，防 JSON 引号注入）
+    if command -v jq >/dev/null 2>&1; then
+        jq -n --arg e "$1" '{email:$e}'
+    else
+        python3 -c 'import json,sys; print(json.dumps({"email": sys.argv[1]}))' "$1"
+    fi
+}
+
 usb_token_field() {  # $1=字段名 $2=JSON 文本（与 manifest 解析同思路：优先 jq，缺则 python3）
     if command -v jq >/dev/null 2>&1; then
         jq -r --arg f "$1" '.[$f] // empty' <<<"$2"
@@ -988,7 +1027,7 @@ else
             ask -rp "请输入邮箱: " USB_EMAIL
             if [ -z "$USB_EMAIL" ]; then
                 c_warn "邮箱不能为空（第 ${attempt} 次尝试）"
-            elif ! usb_portal_post '/activate/request-code' "{\"email\": \"$USB_EMAIL\"}" >/dev/null; then
+            elif ! usb_portal_post '/activate/request-code' "$(usb_email_body "$USB_EMAIL")" >/dev/null; then
                 c_warn "验证码发送失败，请检查网络（第 ${attempt} 次尝试）"
             else
                 c_ok "验证码已发送到邮箱（10 分钟内有效）"
@@ -1030,19 +1069,48 @@ else
     fi
 fi
 
+# 1.7.3：小文件投放统一先落本机暂存、成功后再拷上U盘——fetch_retry 直写 $MNT 时失败会留半截文件
+# 污染U盘根/config（残留入口还会被下轮检测误判为成品盘）；*.ps1 落盘前补 UTF-8 BOM
+# （PS5.1 无 BOM 按 GBK 解析，中文注释直接炸——与 ps1 侧 ventoy.json 的 BOM 坑同源反向）
+usb_place_file() {  # $1=url $2=目标绝对路径
+    local url="$1" dst="$2" tmp
+    tmp="${WORKDIR}/place-$$.$(basename "$dst")"
+    if ! fetch_retry "$url" "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    case "$dst" in
+        *.ps1)
+            # 缺 BOM（EF BB BF）则前置；head -c 3 有界输入，pipefail 下安全
+            if [ "$(head -c 3 "$tmp" | od -An -tx1 | tr -d ' \n')" != "efbbbf" ]; then
+                { printf '\xEF\xBB\xBF'; cat "$tmp"; } > "${tmp}.bom" && mv -f "${tmp}.bom" "$tmp" || return 1
+            fi
+            ;;
+    esac
+    mkdir -p "$(dirname "$dst")"
+    # 1.7.5：同盘暂存+原子改名——WORKDIR(/tmp)→U盘是跨设备，mv 退化 copy+unlink，
+    # 中途失败（ENOSPC/掉盘）会在真实文件名上留半截（入口文件还是成品盘识别文件）；
+    # 改拷 .ai-part（名字无害）再同盘改名，失败清暂存
+    if cp "$tmp" "${dst}.ai-part" && mv -f "${dst}.ai-part" "$dst"; then
+        return 0
+    fi
+    rm -f "${dst}.ai-part"
+    return 1
+}
+
 # 场景③ 在线维修入口（P-A A4 双入口投放：AI-Workstation.bat 与 bat 同内容，设计 §9-3；1.4.0 加 Linux 入口）
 for f in repair-on-windows.bat repair-on-windows.ps1 AI-Workstation.bat repair-on-linux.sh; do
-    if fetch_retry "https://usb.tokeneff.com/maker/$f" "$MNT/$f"; then
+    if usb_place_file "https://usb.tokeneff.com/maker/$f" "$MNT/$f"; then
         c_ok "已放在线维修入口: $f"
     else
-        c_warn "$f 下载失败（在线维修入口缺失，不影响 U盘 启动维修）"
+        c_warn "$f 获取失败（下载/落盘）——在线维修入口缺失，不影响 U盘 启动维修"
     fi
 done
 
 # 办公助手人格（P-A A2/A4）：config/office/CLAUDE.md（勾选了 claude 才投放）
 if [ "$WANT_CLAUDE" = "1" ]; then
     mkdir -p "$MNT/config/office"
-    if fetch_retry "https://usb.tokeneff.com/maker/office-CLAUDE.md" "$MNT/config/office/CLAUDE.md"; then
+    if usb_place_file "https://usb.tokeneff.com/maker/office-CLAUDE.md" "$MNT/config/office/CLAUDE.md"; then
         c_ok "已放入: config/office/CLAUDE.md（办公助手人格）"
     else
         c_warn "office-CLAUDE.md 获取失败。不影响制作——办公模式将以通用模式启动。"
@@ -1054,7 +1122,7 @@ if [ "$WANT_CLAUDE" = "1" ]; then
     got=0
     for n in systematic-debugging verification-before-completion smart-diagnosis data-rescue network-triage reinstall-guardrail; do
         mkdir -p "$MNT/config/claude-skills/$n"
-        if fetch_retry "https://usb.tokeneff.com/maker/claude-skills/$n.md" "$MNT/config/claude-skills/$n/SKILL.md"; then
+        if usb_place_file "https://usb.tokeneff.com/maker/claude-skills/$n.md" "$MNT/config/claude-skills/$n/SKILL.md"; then
             got=$((got+1))
         fi
     done
@@ -1073,17 +1141,21 @@ ver_skip() {  # $1=标记相对路径 $2=期望版本 $3=抽查文件相对路�
     [ -e "$MNT/$3" ] || return 1
     [ "$(tr -d '[:space:]' < "$MNT/$1" 2>/dev/null)" = "$(printf '%s' "$2" | tr -d '[:space:]')" ]
 }
-ver_mark() { printf '%s\n' "$2" > "$MNT/$1"; }
+# 1.7.5：写失败容错——树已拷完仅缺标记时，下次升级重拷一次即可，不该被 set -e 打死整轮
+ver_mark() { printf '%s\n' "$2" > "$MNT/$1" || c_warn "版本标记 $1 写入失败（下次升级将重拷一次）"; }
 
 # Codex CLI 落盘（P-A A3/A4：bin/codex.exe + config/codex/config.toml）
 CODEX_INSTALLED=0
+CODEX_CURRENT=0   # 1.7.5：盘上 codex 为本版 sha 复核通过的（终验门控；fallback 沿用旧版时 0）
 if [ -n "$CODEX_EXE" ]; then
     mkdir -p "$MNT/bin" "$MNT/config/codex"
     if ver_skip bin/codex.ver "$CODEX_VER" bin/codex.exe; then
         c_ok "盘上 codex.exe 已是 ${CODEX_VER}（版本一致，跳过重拷）"
+        CODEX_CURRENT=1
     else
         usb_retry "Codex CLI" cp "$CODEX_EXE" "$MNT/bin/codex.exe"
         ver_mark bin/codex.ver "$CODEX_VER"
+        CODEX_CURRENT=1
     fi
     cat > "$MNT/config/codex/config.toml" <<'TOML'
 # Codex CLI 配置（制作器生成；AI 维修U盘 P-A）
@@ -1098,6 +1170,9 @@ wire_api = "responses"
 TOML
     CODEX_INSTALLED=1
     c_ok "已放入: bin/codex.exe + config/codex/config.toml"
+elif [ "$UPGRADE_MODE" = "1" ] && [ "$WANT_CODEX" = "1" ] && [ -e "$MNT/bin/codex.exe" ]; then
+    CODEX_INSTALLED=1
+    c_warn "codex 新版获取失败——沿用盘上已有版本（不阻断制作）"
 fi
 
 # Node / OpenClaw / Pi 落盘（P-B §3.3-3.5：bin/node/ + bin/openclaw/ + bin/pi/）
@@ -1106,6 +1181,11 @@ NODE_INSTALLED=0; OC_INSTALLED=0; PI_INSTALLED=0
 mkdir -p "${WORKDIR}/extract"
 if [ -n "$NODE_TAR" ]; then
     NODE_STAGE="${WORKDIR}/extract/node"
+    # 1.7.4 同版本跳拷补漏：1.7.1 只做了四件套，Node/OpenClaw/Pi 漏网（每次升级白解压+重拷）
+    if ver_skip bin/node.ver "$NODE_VER" bin/node/node.exe; then
+        NODE_INSTALLED=1
+        c_ok "盘上 bin/node 已是 ${NODE_VER}（版本一致，跳过解压与重拷）"
+    else
     echo "    解压便携 Node（本机暂存）..."
     # 注意用 -f 不用 -x：zip 内 node.exe 无执行位（external_attr=0），Linux 解出 0664；
     # 该 exe 是 Windows 载荷，Linux 侧只做存在性判断
@@ -1115,13 +1195,22 @@ if [ -n "$NODE_TAR" ]; then
         && rm -rf "$MNT/bin/node" \
         && usb_tree_copy "$INNER" "$MNT/bin/node" "便携 Node" "node.exe"; then
         NODE_INSTALLED=1
+        ver_mark bin/node.ver "$NODE_VER"
         c_ok "已落盘: bin/node/（便携 Node 运行时）"
     else
         c_warn "便携 Node 落盘失败。OpenClaw/Pi 将无法运行，不阻断制作。"
     fi
+    fi
+elif [ "$UPGRADE_MODE" = "1" ] && [ "$WANT_NODE" = "1" ] && [ -e "$MNT/bin/node/node.exe" ]; then
+    NODE_INSTALLED=1
+    c_warn "便携 Node 新版包获取失败——沿用盘上已有版本（不阻断制作）"
 fi
 if [ -n "$OC_TAR" ]; then
     OC_STAGE="${WORKDIR}/extract/openclaw"
+    if ver_skip bin/openclaw.ver "$OC_VER" bin/openclaw/node_modules/openclaw/openclaw.mjs; then
+        OC_INSTALLED=1
+        c_ok "盘上 bin/openclaw 已是 ${OC_VER}（版本一致，跳过解包与重拷）"
+    else
     echo "    解包 OpenClaw 预装包（本机暂存）..."
     # tar 内为 node_modules/ 顶层；预装包已 --dereference 烤平符号链接（exFAT 兼容）
     extract_progress "OpenClaw" "$OC_STAGE" tar -xzf "$OC_TAR" -C "$OC_STAGE" || true
@@ -1129,29 +1218,44 @@ if [ -n "$OC_TAR" ]; then
         && rm -rf "$MNT/bin/openclaw" \
         && usb_tree_copy "$OC_STAGE" "$MNT/bin/openclaw" "OpenClaw" "node_modules/openclaw/openclaw.mjs"; then
         OC_INSTALLED=1
+        ver_mark bin/openclaw.ver "$OC_VER"
         c_ok "已落盘: bin/openclaw/（入口 node_modules/openclaw/openclaw.mjs）"
     else
         c_warn "OpenClaw 落盘失败。不阻断制作——启动器不显示其入口。"
     fi
+    fi
+elif [ "$UPGRADE_MODE" = "1" ] && [ "$WANT_OPENCLAW" = "1" ] && [ -e "$MNT/bin/openclaw/node_modules/openclaw/openclaw.mjs" ]; then
+    OC_INSTALLED=1
+    c_warn "OpenClaw 新版包获取失败——沿用盘上已有版本（不阻断制作）"
 fi
 if [ -n "$PI_TAR" ]; then
     PI_STAGE="${WORKDIR}/extract/pi"
+    if ver_skip bin/pi.ver "$PI_VER" bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js; then
+        PI_INSTALLED=1
+        c_ok "盘上 bin/pi 已是 ${PI_VER}（版本一致，跳过解包与重拷）"
+    else
     echo "    解包 Pi 预装包（本机暂存）..."
     extract_progress "Pi" "$PI_STAGE" tar -xzf "$PI_TAR" -C "$PI_STAGE" || true
     if [ -f "$PI_STAGE/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ] \
         && rm -rf "$MNT/bin/pi" \
         && usb_tree_copy "$PI_STAGE" "$MNT/bin/pi" "Pi" "node_modules/@mariozechner/pi-coding-agent/dist/cli.js"; then
         PI_INSTALLED=1
+        ver_mark bin/pi.ver "$PI_VER"
         c_ok "已落盘: bin/pi/（入口 node_modules/@mariozechner/pi-coding-agent/dist/cli.js）"
     else
         c_warn "Pi 落盘失败。不阻断制作——启动器不显示其入口。"
     fi
+    fi
+elif [ "$UPGRADE_MODE" = "1" ] && [ "$WANT_PI" = "1" ] && [ -e "$MNT/bin/pi/node_modules/@mariozechner/pi-coding-agent/dist/cli.js" ]; then
+    PI_INSTALLED=1
+    c_warn "Pi 新版包获取失败——沿用盘上已有版本（不阻断制作）"
 fi
 
 # 场景③便携运行时 → U盘 bin\（claude.exe 直跑 + MinGit 提供 bash）
 if [ -n "$CLAUDE_EXE" ]; then
     mkdir -p "$MNT/bin"
     if ver_skip bin/claude-win.ver "$CLAUDE_VER" bin/claude.exe; then
+        CLAUDE_OK=1
         c_ok "盘上 claude.exe 已是 ${CLAUDE_VER}（版本一致，跳过重拷）"
     else
         echo "    拷入 claude.exe ..."
@@ -1160,12 +1264,18 @@ if [ -n "$CLAUDE_EXE" ]; then
         if [ "${actual,,}" = "${CLAUDE_SHA,,}" ]; then
             c_ok "bin/claude.exe 盘上复核通过"
             ver_mark bin/claude-win.ver "$CLAUDE_VER"
+            CLAUDE_OK=1
+            # 1.7.3：成功提示移入复核通过分支——否则 sha 失败移除后仍误报「已放入」
+            c_ok "便携版 claude.exe 已放入 U盘 bin/"
         else
             rm -f "$MNT/bin/claude.exe"
             c_warn "bin/claude.exe 拷贝后校验失败，已移除（不阻断制作）——场景③将回落为在线安装。"
         fi
-        c_ok "便携版 claude.exe 已放入 U盘 bin/"
     fi
+elif [ "$UPGRADE_MODE" = "1" ] && [ "$WANT_CLAUDE" = "1" ] && [ -e "$MNT/bin/claude.exe" ]; then
+    # 1.7.5：新版获取失败的升级沿用盘上旧版——不隐藏能用的入口（不写标记，下轮会正常升级）
+    CLAUDE_OK=1
+    c_warn "claude.exe 新版获取失败——沿用盘上已有版本（不阻断制作）"
 fi
 # 场景③ Linux 便携引擎 → U盘 bin/（repair-on-linux.sh 读 bin/claude-linux + .sha256 旁车强校验）
 if [ -n "$CLAUDE_LINUX" ]; then
@@ -1206,7 +1316,7 @@ fi
 
 # agents.json / isos.json（P-A A4：启动器据此显隐入口；语义与设计 §4.0 对齐）
 #   installed=true → 列出并启动；userDeclined=true → 灰色行；两者皆无 → 隐藏
-CLAUDE_INSTALLED=0; [ -n "$CLAUDE_EXE" ] && CLAUDE_INSTALLED=1
+CLAUDE_INSTALLED=0; [ "$CLAUDE_OK" = "1" ] && CLAUDE_INSTALLED=1   # 1.7.5：挂盘上复核结果，不再以缓存路径判（sha 失败移除后曾谎报已装）
 CLAUDE_DECLINED=0; [ "$WANT_CLAUDE" = "1" ] || CLAUDE_DECLINED=1
 CODEX_DECLINED=0; [ "$WANT_CODEX" = "1" ] || CODEX_DECLINED=1
 # P-B：OpenClaw/Pi/Node 勾选语义同上（node 非「引擎」，但启动器据此决定是否 PATH 前置 bin/node）
@@ -1272,7 +1382,10 @@ for name in ai-repair-live winpe 'memtest86+'; do
 done
 # Codex 盘上复核（P-A A4：勾选且已落盘才校验；未勾选不得因缺失报错）
 if [ "$CODEX_INSTALLED" = "1" ]; then
-    sha_check "$MNT/bin/codex.exe" "$CODEX_SHA" "bin/codex.exe"
+    # 1.7.5：仅对本版校验通过的拷贝做终验 sha（fallback 沿用旧版时盘上是旧 sha，验新 sha 必误杀）
+    if [ "$CODEX_CURRENT" = "1" ]; then
+        sha_check "$MNT/bin/codex.exe" "$CODEX_SHA" "bin/codex.exe"
+    fi
     [ -f "$MNT/config/codex/config.toml" ] || die "config/codex/config.toml 缺失。" "请重新运行制作器。"
 fi
 # Debian 盘上复核（勾选且已拷入才校验）

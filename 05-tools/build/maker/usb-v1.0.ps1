@@ -1,7 +1,20 @@
-﻿# usb-v1.0.ps1 版本: 1.7.1  (AI 电脑维修 U盘 一键制作器 · Windows 端)
+﻿# usb-v1.0.ps1 版本: 1.7.5  (AI 电脑维修 U盘 一键制作器 · Windows 端)
 # =====================================================================
 # 创建日期: 2026-09-12
-# 版本: 1.7.1（与 sh 同版：升级提速补全——便携运行时同版本跳拷——盘上 bin\*.ver 标记
+# 版本: 1.7.5（code-review 修复——①防误清守卫文案：改过卷标的成品盘引导改回卷标，
+#       不再推向清盘的「重新制作」；②入口投放同盘 .ai-part 暂存+原子改名（下载中断
+#       不再留半截入口文件））
+# 1.7.4（便携运行时跳拷补漏：Node/OpenClaw/Pi 纳入 bin\*.ver 同版本跳过——
+#       1.7.1 只做了 claude-win/portablegit/codex，P-B 三件升级时每次白解压+重拷
+#       （Node ~110MB、OpenClaw ~380MB、Pi ~90MB 盘写入）；标记与 sh 侧同名互认）
+# 1.7.3（code-review 审计修复——①ventoy.json 改无 BOM 写入（Set-Content UTF8
+#       在 PS5.1 必带 BOM，Ventoy 解析异常）；②Ventoy zip 解压移到跳刷判定后，跳过刷写
+#       不再白解压 30~60 秒；③stale-cache 续传混合自愈（校验失败删坏文件后干净重下一次）；
+#       ④升级模式目标盘无 Ventoy 卷即中止（防手拷入口脚本的普通U盘被 /I 误清））
+# 1.7.2（补齐双侧投放对称缺口——Windows 制盘此前不写 maker_version、不投放
+#       repair-on-linux.sh（仅 sh 侧有），Windows 做的盘在 Linux 机上缺在线维修入口、
+#       启动器激活上报缺 maker_version 归因；本版两处补齐 + 结尾提示补 Linux 分支）
+# 1.7.1（与 sh 同版：升级提速补全——便携运行时同版本跳拷——盘上 bin\*.ver 标记
 #       （claude-win/portablegit/codex）与当前版本一致时跳过解压+重拷，省约 390MB 盘写入；
 #       标记与 sh 侧同名互认，规则同 ventoy_version）
 # 1.7.0（升级提速——升级模式两项跳过——①盘上 ventoy_version 标记与
@@ -31,7 +44,7 @@ try {
 } catch { }
 
 # ---------------- 全局常量（集中定义，改这里即可） ----------------
-$Script:ScriptVersion   = '1.7.1'
+$Script:ScriptVersion   = '1.7.5'
 $Script:ScriptUrl       = 'https://usb.tokeneff.com/maker/usb-v1.0.ps1'      # 自提权时按版本化 URL 重新下载自身（见下）
 $Script:ManifestUrl     = 'https://usb.tokeneff.com/maker/manifest.json'   # TODO(发布): 迁移到独立 CDN 域名（§2.5.4 故障隔离）
 $Script:MinBaseGB       = 5     # 选盘前基础门槛（P-A A4 两段预检之一）：Ventoy + 1.5GB 维修 ISO + /R:2048 保留 + 余量 ≈ 5GB；
@@ -402,6 +415,20 @@ function Test-FileSha256([string]$Path, [string]$Expected, [string]$DisplayName)
     Write-Ok "$DisplayName 校验通过"
 }
 
+# 1.7.3 stale-cache 续传混合自愈：Get-FileViaBits 的 Range 续传可能把旧缓存（旧半截/旧完整文件）
+# 与远端新内容拼出毒文件（版本号不随发布变的组件如 claude.exe 尤甚）。Test-FileSha256 判毒后已删坏文件，
+# 此处立即干净重下一次（文件已删 → 必为全新下载，不再续传）并复验——一次续传事故不再打死整轮制作
+function Get-FileVerifiedViaBits([string]$Url, [string]$Dest, [string]$Expected, [string]$DisplayName) {
+    Get-FileViaBits -Url $Url -Dest $Dest -DisplayName $DisplayName
+    try {
+        Test-FileSha256 -Path $Dest -Expected $Expected -DisplayName $DisplayName
+    } catch {
+        Write-Warn "$DisplayName 校验失败（坏文件已删除），立即重新完整下载一次..."
+        Get-FileViaBits -Url $Url -Dest $Dest -DisplayName $DisplayName
+        Test-FileSha256 -Path $Dest -Expected $Expected -DisplayName $DisplayName
+    }
+}
+
 # ---------------- 制作时签发 USB token（可选，可跳过；幂等） ----------------
 
 # 向 portal 提交 JSON POST，成功返回解析后的对象；失败抛异常（含服务端错误信息）
@@ -644,6 +671,13 @@ if ($candidates.Count -eq 0) {
         Die "升级目标定位异常（磁盘 $($targetDisk.Number): $($targetDisk.FriendlyName)）。" '请重新插好U盘后重试。'
     }
     Write-Ok ("升级目标已锁定: 磁盘 {0}  |  {1}  |  {2} GB（{3} 所在的U盘）" -f $targetDisk.Number, $targetDisk.FriendlyName, [math]::Round($targetDisk.Size / 1GB, 1), $upgradeRoot)
+    # 1.7.3 防误清：成品盘识别只看入口文件（repair-on-*），手拷入口脚本到普通U盘会被误判为成品盘
+    # → 升级模式强制要求目标盘存在 Ventoy 卷；否则后续 /I 全新安装会整盘重建、清掉用户数据
+    if (-not (Get-Partition -DiskNumber $targetDisk.Number -ErrorAction SilentlyContinue |
+              Get-Volume -ErrorAction SilentlyContinue |
+              Where-Object { $_.FileSystemLabel -eq 'Ventoy' })) {
+        Die "目标盘没有 Ventoy 卷，不是本项目成品U盘（可能只是拷入了入口脚本）。" '为防误清数据已中止。若确为本项目成品盘且改过卷标，请将数据分区卷标改回 Ventoy 后重试；若确实要重新制作此盘，请重新运行并选「重新制作」。'
+    }
 } elseif ($candidates.Count -eq 1) {
     # 唯一合格 U盘 → 自动选中，免除编号输入（防误写由下方整盘清空 YES 确认兜底，§2.5.3-2）
     $targetDisk = $candidates[0]
@@ -874,8 +908,7 @@ foreach ($name in $selfMadeNames) {
         }
 
         $dest = Join-Path $Script:CacheDir $c.filename
-        Get-FileViaBits -Url $url -Dest $dest -DisplayName "$($c.name) ($($c.filename))"
-        Test-FileSha256 -Path $dest -Expected $c.sha256 -DisplayName $c.filename
+        Get-FileVerifiedViaBits -Url $url -Dest $dest -Expected $c.sha256 -DisplayName "$($c.name) ($($c.filename))"
         $downloads[$name] = $dest
     } catch {
         Die "组件 $name 下载/校验失败。" "请检查网络后重新运行。详细原因: $($_.Exception.Message)"
@@ -899,8 +932,7 @@ if ($wantClaude) {
         New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
         Write-Host "  便携版 claude $claudeVer（win32-x64，约 236MB）..."
         $Script:ClaudeExeLocal = Join-Path $claudeDir 'claude.exe'
-        Get-FileViaBits -Url "$($Script:ClaudeGcsBase)/$claudeVer/win32-x64/claude.exe" -Dest $Script:ClaudeExeLocal -DisplayName "claude-portable ($claudeVer)"
-        Test-FileSha256 -Path $Script:ClaudeExeLocal -Expected $Script:ClaudeExeSha256 -DisplayName "claude.exe ($claudeVer)"
+        Get-FileVerifiedViaBits -Url "$($Script:ClaudeGcsBase)/$claudeVer/win32-x64/claude.exe" -Dest $Script:ClaudeExeLocal -Expected $Script:ClaudeExeSha256 -DisplayName "claude.exe ($claudeVer)"
         $Script:ClaudePortableVer = $claudeVer   # 1.7.1：供 bin\claude-win.ver 跳拷比对
         Write-Ok "便携版 claude.exe 就绪（$claudeVer，官方 sha256 校验通过）"
     } catch {
@@ -916,8 +948,7 @@ if ($wantClaude -or $wantCodex) {
         New-Item -ItemType Directory -Force -Path $pgDir | Out-Null
         Write-Host '  便携 Git（Bash 工具依赖，约 154MB）...'
         $MinGitLocal = Join-Path $pgDir 'PortableGit.zip'
-        Get-FileViaBits -Url $Script:PortableGitUrl -Dest $MinGitLocal -DisplayName 'PortableGit-2.56.0.2-64-bit.zip'
-        Test-FileSha256 -Path $MinGitLocal -Expected $Script:PortableGitSha256 -DisplayName 'PortableGit-2.56.0.2-64-bit.zip'
+        Get-FileVerifiedViaBits -Url $Script:PortableGitUrl -Dest $MinGitLocal -Expected $Script:PortableGitSha256 -DisplayName 'PortableGit-2.56.0.2-64-bit.zip'
         Write-Ok '便携 Git 就绪（2.56.0.2，自托管 sha256 校验通过）'
     } catch {
         Write-Warn "便携 Git 获取失败（$($_.Exception.Message)）。不阻断制作——目标电脑已装 Git 时不受影响，未装则 Bash 工具受限。"
@@ -933,8 +964,7 @@ if ($wantCodex -and $codexComponent) {
     try {
         Write-Host "  Codex CLI $($codexComponent.version)（约 $($codexComponent.sizeBytes / 1MB)MB）..."
         $Script:CodexExeLocal = Join-Path $Script:CacheDir $codexComponent.filename
-        Get-FileViaBits -Url $codexComponent.url -Dest $Script:CodexExeLocal -DisplayName "$($codexComponent.name) ($($codexComponent.filename))"
-        Test-FileSha256 -Path $Script:CodexExeLocal -Expected $codexComponent.sha256 -DisplayName $codexComponent.filename
+        Get-FileVerifiedViaBits -Url $codexComponent.url -Dest $Script:CodexExeLocal -Expected $codexComponent.sha256 -DisplayName "$($codexComponent.name) ($($codexComponent.filename))"
         Write-Ok 'Codex CLI 就绪（发布侧 sha256 校验通过）'
     } catch {
         Write-Warn "Codex CLI 下载/校验失败（$($_.Exception.Message)）。不阻断制作——盘上将不装 Codex，启动器不显示其入口。"
@@ -948,8 +978,7 @@ if ($wantDebian) {
     try {
         Write-Host "  Debian 12 netinst（$DebianName，官方 cdimage 存档直链，约 650MB）..."
         $DebianIsoLocal = Join-Path $Script:CacheDir $DebianName
-        Get-FileViaBits -Url $DebianUrl -Dest $DebianIsoLocal -DisplayName $DebianName
-        Test-FileSha256 -Path $DebianIsoLocal -Expected $DebianSha256 -DisplayName $DebianName
+        Get-FileVerifiedViaBits -Url $DebianUrl -Dest $DebianIsoLocal -Expected $DebianSha256 -DisplayName $DebianName
         Write-Ok 'Debian 12 netinst 就绪（官方 SHA256SUMS 钉值校验通过）'
     } catch {
         Write-Warn "Debian 12 镜像下载/校验失败（$($_.Exception.Message)）。不阻断制作——盘上将无 Linux 安装镜像。"
@@ -963,8 +992,7 @@ if ($wantNode -and $nodeComponent) {
     try {
         Write-Host "  便携 Node $($nodeComponent.version)（约 $($nodeComponent.sizeBytes / 1MB)MB zip，解压后约 ${nodeEstGB}GB）..."
         $Script:NodeZipLocal = Join-Path $Script:CacheDir $nodeComponent.filename
-        Get-FileViaBITS -Url $nodeComponent.url -Dest $Script:NodeZipLocal -DisplayName "$($nodeComponent.name) ($($nodeComponent.filename))"
-        Test-FileSha256 -Path $Script:NodeZipLocal -Expected $nodeComponent.sha256 -DisplayName $nodeComponent.filename
+        Get-FileVerifiedViaBits -Url $nodeComponent.url -Dest $Script:NodeZipLocal -Expected $nodeComponent.sha256 -DisplayName "$($nodeComponent.name) ($($nodeComponent.filename))"
         Write-Ok '便携 Node 运行时就绪（官方 SHASUMS 钉值校验通过）'
     } catch {
         Write-Warn "便携 Node 下载/校验失败（$($_.Exception.Message)）。OpenClaw/Pi 将无法运行，但不阻断制作。"
@@ -975,8 +1003,7 @@ if ($wantOpenclaw -and $openclawComponent) {
     try {
         Write-Host "  OpenClaw $($openclawComponent.version) 预装包（约 $($openclawComponent.sizeBytes / 1MB)MB tar.gz）..."
         $Script:OpenclawTarLocal = Join-Path $Script:CacheDir $openclawComponent.filename
-        Get-FileViaBITS -Url $openclawComponent.url -Dest $Script:OpenclawTarLocal -DisplayName "$($openclawComponent.name) ($($openclawComponent.filename))"
-        Test-FileSha256 -Path $Script:OpenclawTarLocal -Expected $openclawComponent.sha256 -DisplayName $openclawComponent.filename
+        Get-FileVerifiedViaBits -Url $openclawComponent.url -Dest $Script:OpenclawTarLocal -Expected $openclawComponent.sha256 -DisplayName "$($openclawComponent.name) ($($openclawComponent.filename))"
         Write-Ok 'OpenClaw 预装包就绪（发布侧 sha256 校验通过）'
     } catch {
         Write-Warn "OpenClaw 下载/校验失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
@@ -987,8 +1014,7 @@ if ($wantPi -and $piComponent) {
     try {
         Write-Host "  Pi $($piComponent.version) 预装包（约 $($piComponent.sizeBytes / 1MB)MB tar.gz）..."
         $Script:PiTarLocal = Join-Path $Script:CacheDir $piComponent.filename
-        Get-FileViaBITS -Url $piComponent.url -Dest $Script:PiTarLocal -DisplayName "$($piComponent.name) ($($piComponent.filename))"
-        Test-FileSha256 -Path $Script:PiTarLocal -Expected $piComponent.sha256 -DisplayName $piComponent.filename
+        Get-FileVerifiedViaBits -Url $piComponent.url -Dest $Script:PiTarLocal -Expected $piComponent.sha256 -DisplayName "$($piComponent.name) ($($piComponent.filename))"
         Write-Ok 'Pi 预装包就绪（发布侧 sha256 校验通过）'
     } catch {
         Write-Warn "Pi 下载/校验失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
@@ -1039,8 +1065,7 @@ foreach ($win in @(@{key='win10'; flag=$wantWin10; name='Windows 10'}, @{key='wi
     try {
         $url = Get-MsIsoUrl -ProductPageUrl $c.sourceUrl -EditionKeyword $c.editionKeyword
         $dest = Join-Path $Script:CacheDir $c.filename
-        Get-FileViaBits -Url $url -Dest $dest -DisplayName "$($win.name) 官方 ISO"
-        Test-FileSha256 -Path $dest -Expected $c.sha256 -DisplayName $c.filename
+        Get-FileVerifiedViaBits -Url $url -Dest $dest -Expected $c.sha256 -DisplayName "$($win.name) 官方 ISO"
         $winIsoLocal[$win.key] = $dest
     } catch {
         Write-Warn "获取 $($win.name) 官方下载链接失败: $($_.Exception.Message)"
@@ -1059,14 +1084,9 @@ function Test-DestSameAsRelease([string]$SrcPath, [string]$DestDir, [string]$Exp
     return ((Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash -eq $Expected)
 }
 
-# ---------------- 8. 解压 Ventoy 包，CLI 无人值守写入 ----------------
-Write-Step '正在将 Ventoy 引导层写入 U盘...'
+# ---------------- 8. Ventoy 无人值守写入（1.7.3：解压移到跳刷判定之后，跳过刷写时不再白解压 30~60 秒） ----------------
 $ventoyZip = $downloads['ventoy']
 $ventoyDir = Join-Path $Script:WorkDir 'ventoy-extracted'
-if (Test-Path $ventoyDir) { Remove-Item $ventoyDir -Recurse -Force }
-Expand-WithProgress -Archive $ventoyZip -DestDir $ventoyDir -Label 'Ventoy'
-$ventoyExe = Get-ChildItem -Path $ventoyDir -Recurse -Filter 'Ventoy2Disk.exe' | Select-Object -First 1
-if ($null -eq $ventoyExe) { Die 'Ventoy 包内未找到 Ventoy2Disk.exe。' 'manifest 指向的 Ventoy 包可能损坏，请联系客服。' }
 
 # 已装 Ventoy → /U 无损升级（数据分区文件与 ISO 全部保留）；未装 → /I 全新安装（重建分区，GPT + 盘尾保留）
 $hasVentoy = [bool](Get-Partition -DiskNumber $targetDisk.Number -ErrorAction SilentlyContinue |
@@ -1090,6 +1110,12 @@ if ($upgradeMode -and $hasVentoy -and (Test-Path -LiteralPath (Join-Path $upgrad
 if ($ventoySkip) {
     Write-Ok "盘上 Ventoy 引导层已是 v$($Script:VentoyVersion)（版本一致，跳过刷写）"
 } else {
+# —— 实刷路径才解压（1.7.3：$ventoyExe 仅本分支内定义与使用）——
+Write-Step '正在将 Ventoy 引导层写入 U盘...'
+if (Test-Path $ventoyDir) { Remove-Item $ventoyDir -Recurse -Force }
+Expand-WithProgress -Archive $ventoyZip -DestDir $ventoyDir -Label 'Ventoy'
+$ventoyExe = Get-ChildItem -Path $ventoyDir -Recurse -Filter 'Ventoy2Disk.exe' | Select-Object -First 1
+if ($null -eq $ventoyExe) { Die 'Ventoy 包内未找到 Ventoy2Disk.exe。' 'manifest 指向的 Ventoy 包可能损坏，请联系客服。' }
 
 Write-Host "    执行: Ventoy2Disk.exe $ventoyArgs"
 Write-Host '    正在写入引导层（请勿拔盘）...' -ForegroundColor DarkGray
@@ -1159,6 +1185,8 @@ try {
     [IO.File]::WriteAllText((Join-Path $Script:CacheDir 'session-nonce'), $Script:SessionNonce, $utf8NoBom)
     # 1.7.0 升级提速①：引导层版本标记（与 sh 侧同名互认），下次升级版本一致则跳过刷引导
     [IO.File]::WriteAllText((Join-Path $Script:UsbRoot 'ventoy_version'), $Script:VentoyVersion, $utf8NoBom)
+    # maker_version（与 sh 侧同名互认）：repair-on-*.ps1/sh 激活上报归因字段，缺则 unknown
+    [IO.File]::WriteAllText((Join-Path $Script:UsbRoot 'maker_version'), $Script:ScriptVersion, $utf8NoBom)
 } catch { Write-Warn "掉盘标识写入失败（$($_.Exception.Message)）——掉盘后将无法自动续拷，但制作不受影响。" }
 Write-Host ''
 Write-Host '    >>> 接下来开始向 U盘 写入文件，此步最慢（小文件多、U盘 写速有限），请勿拔盘 <<< ' -ForegroundColor Yellow
@@ -1220,7 +1248,9 @@ $ventoyJson = @{
     )
     boot_menu_alias = $aliasList
 } | ConvertTo-Json -Depth 5
-Set-Content -Path (Join-Path $Script:UsbRoot 'ventoy\ventoy.json') -Value $ventoyJson -Encoding UTF8
+# 1.7.3：Set-Content -Encoding UTF8 在 PS5.1 必带 BOM，Ventoy 解析 ventoy.json 会异常；
+# 与 sh 侧同为无 BOM 写入（同 nonce/ventoy_version 的 UTF8Encoding($false) 模式）
+[IO.File]::WriteAllText((Join-Path $Script:UsbRoot 'ventoy\ventoy.json'), $ventoyJson, (New-Object System.Text.UTF8Encoding($false)))
 
 # config 骨架：Claude Code 配置与凭证占位（§2.2.4，token 由用户首次使用时自行写入）
 Set-Content -Path (Join-Path $Script:UsbRoot 'config\README.txt') -Encoding UTF8 -Value @"
@@ -1244,23 +1274,32 @@ CONFIG_OVERRIDE=1
 "@
 }
 
-# 场景③ Windows 在线维修双击入口（repair-on-windows.bat/.ps1，与制作脚本同源同目录；
+# 场景③ 在线维修入口（与 sh 侧投放清单一致：repair-on-windows.bat/.ps1 + AI-Workstation.bat
+# + repair-on-linux.sh，与制作脚本同源同目录；
 # WebClient 二进制下载，避免 Set-Content 给 bat 写入 BOM 导致 @echo off 失效）
 # P-A A4：双入口投放（repair-on-windows.bat 与 AI-Workstation.bat 同内容，设计 §9-3）
-foreach ($f in @('repair-on-windows.bat', 'repair-on-windows.ps1', 'AI-Workstation.bat')) {
+foreach ($f in @('repair-on-windows.bat', 'repair-on-windows.ps1', 'AI-Workstation.bat', 'repair-on-linux.sh')) {
     try {
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add('User-Agent', "ai-repair-usb-maker/$Script:ScriptVersion")
         $dst = Join-Path $Script:UsbRoot $f
-        $wc.DownloadFile('https://usb.tokeneff.com/maker/' + $f, $dst)
-        # ps1 须带 UTF-8 BOM（PS 5.1 无 BOM 按 GBK 读中文串会炸语法）；线上已带 BOM，此处补写双保险
-        if ($f -like '*.ps1') {
-            $txt = [IO.File]::ReadAllText($dst, [Text.Encoding]::UTF8)
-            [IO.File]::WriteAllText($dst, $txt, [Text.UTF8Encoding]::new($true))
+        # 1.7.5：同盘 .ai-part 暂存+原子改名——下载中断不再在真实文件名上留半截入口（对齐 sh usb_place_file）
+        $part = "$dst.ai-part"
+        try {
+            $wc.DownloadFile('https://usb.tokeneff.com/maker/' + $f, $part)
+            # ps1 须带 UTF-8 BOM（PS 5.1 无 BOM 按 GBK 读中文串会炸语法）；线上已带 BOM，此处补写双保险
+            if ($f -like '*.ps1') {
+                $txt = [IO.File]::ReadAllText($part, [Text.Encoding]::UTF8)
+                [IO.File]::WriteAllText($part, $txt, [Text.UTF8Encoding]::new($true))
+            }
+            Move-Item -LiteralPath $part -Destination $dst -Force
+        } catch {
+            Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+            throw
         }
-        Write-Ok "已放入 Windows 在线维修入口: $f"
+        Write-Ok "已放入在线维修入口: $f"
     } catch {
-        Write-Warn "$f 下载失败（Windows 在线维修入口缺失，不影响 U盘 启动维修）。网络恢复后重新制作即可补上。"
+        Write-Warn "$f 获取失败（下载/落盘）——在线维修入口缺失，不影响 U盘 启动维修。网络恢复后重新制作即可补上。"
     }
 }
 
@@ -1387,6 +1426,11 @@ $nodeInstalledFinal = $false; $openclawInstalledFinal = $false; $piInstalledFina
 $haveTar = [bool](Get-Command tar.exe -ErrorAction SilentlyContinue)
 if (-not $haveTar) { Write-Warn '系统缺少 tar.exe（需 Win10 1803+），OpenClaw/Pi 无法解包，本次跳过（不阻断制作）。' }
 if ($Script:NodeZipLocal -and (Test-Path $Script:NodeZipLocal)) {
+    # 1.7.4 同版本跳拷补漏：1.7.1 只做了 claude-win/portablegit/codex，Node/OpenClaw/Pi 漏网
+    if (Test-RuntimeVerSkip 'bin\node.ver' $nodeComponent.version 'bin\node\node.exe') {
+        $nodeInstalledFinal = $true
+        Write-Ok "盘上 bin\node 已是 $($nodeComponent.version)（版本一致，跳过解压与重拷）"
+    } else {
     try {
         # 1.3.7 两段式：解压到本机暂存 → 定位内层目录 → 整树拷入U盘（禁止跨卷 Move；掉盘可恢复+对账）
         Write-Host '  解压便携 Node（本机暂存）...'
@@ -1400,14 +1444,21 @@ if ($Script:NodeZipLocal -and (Test-Path $Script:NodeZipLocal)) {
             Copy-TreeWithRecovery -Source $nodeSrc -Dest (Join-Path $Script:UsbRoot 'bin\node') -Label '便携 Node'
             Assert-TreeSynced -Source $nodeSrc -Dest (Join-Path $Script:UsbRoot 'bin\node') -Label '便携 Node' -EntryFiles @('node.exe')
         }
+        Write-RuntimeVerMarker 'bin\node.ver' $nodeComponent.version
         $nodeInstalledFinal = $true
         Write-Ok '已落盘: bin\node\（便携 Node 运行时）'
     } catch {
         Write-Warn "便携 Node 落盘失败（$($_.Exception.Message)）。OpenClaw/Pi 将无法运行，不阻断制作。"
         $nodeInstalledFinal = $false
     }
+    }
 }
 if ($Script:OpenclawTarLocal -and (Test-Path $Script:OpenclawTarLocal) -and $haveTar) {
+    # 1.7.4 同版本跳拷补漏（同 Node）
+    if (Test-RuntimeVerSkip 'bin\openclaw.ver' $openclawComponent.version 'bin\openclaw\node_modules\openclaw\openclaw.mjs') {
+        $openclawInstalledFinal = $true
+        Write-Ok "盘上 bin\openclaw 已是 $($openclawComponent.version)（版本一致，跳过解包与重拷）"
+    } else {
     try {
         # 1.3.7 两段式：解包到本机暂存再整树拷入；tar 内为 node_modules\ 顶层，exFAT 无 symlink，预装包已 --dereference 烤平
         Write-Host '  解包 OpenClaw 预装包（本机暂存）...'
@@ -1419,14 +1470,21 @@ if ($Script:OpenclawTarLocal -and (Test-Path $Script:OpenclawTarLocal) -and $hav
             Copy-TreeWithRecovery -Source $ocStaging -Dest (Join-Path $Script:UsbRoot 'bin\openclaw') -Label 'OpenClaw'
             Assert-TreeSynced -Source $ocStaging -Dest (Join-Path $Script:UsbRoot 'bin\openclaw') -Label 'OpenClaw' -EntryFiles @('node_modules\openclaw\openclaw.mjs')
         }
+        Write-RuntimeVerMarker 'bin\openclaw.ver' $openclawComponent.version
         $openclawInstalledFinal = $true
         Write-Ok '已落盘: bin\openclaw\（OpenClaw，入口 node_modules\openclaw\openclaw.mjs）'
     } catch {
         Write-Warn "OpenClaw 落盘失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
         $openclawInstalledFinal = $false
     }
+    }
 }
 if ($Script:PiTarLocal -and (Test-Path $Script:PiTarLocal) -and $haveTar) {
+    # 1.7.4 同版本跳拷补漏（同 Node）
+    if (Test-RuntimeVerSkip 'bin\pi.ver' $piComponent.version 'bin\pi\node_modules\@mariozechner\pi-coding-agent\dist\cli.js') {
+        $piInstalledFinal = $true
+        Write-Ok "盘上 bin\pi 已是 $($piComponent.version)（版本一致，跳过解包与重拷）"
+    } else {
     try {
         Write-Host '  解包 Pi 预装包（本机暂存）...'
         $piStaging = Join-Path $Script:ExtractDir 'pi'
@@ -1438,11 +1496,13 @@ if ($Script:PiTarLocal -and (Test-Path $Script:PiTarLocal) -and $haveTar) {
             Copy-TreeWithRecovery -Source $piStaging -Dest (Join-Path $Script:UsbRoot 'bin\pi') -Label 'Pi'
             Assert-TreeSynced -Source $piStaging -Dest (Join-Path $Script:UsbRoot 'bin\pi') -Label 'Pi' -EntryFiles @('node_modules\@mariozechner\pi-coding-agent\dist\cli.js')
         }
+        Write-RuntimeVerMarker 'bin\pi.ver' $piComponent.version
         $piInstalledFinal = $true
         Write-Ok '已落盘: bin\pi\（Pi，入口 node_modules\@mariozechner\pi-coding-agent\dist\cli.js）'
     } catch {
         Write-Warn "Pi 落盘失败（$($_.Exception.Message)）。不阻断制作——启动器不显示其入口。"
         $piInstalledFinal = $false
+    }
     }
 }
 
@@ -1564,6 +1624,13 @@ if (Test-Path (Join-Path $Script:UsbRoot 'AI-Workstation.bat')) {
         Write-Host '电脑还能进 Windows 时: 双击 U盘 根目录 AI-Workstation.bat（或 repair-on-windows.bat），即可在线维修（首次将在线安装 claude）'
     }
     if ($codexInstalledFinal) { Write-Host '模式菜单内可用 Codex CLI（OpenAI 风格命令行助手）' }
+}
+if (Test-Path (Join-Path $Script:UsbRoot 'repair-on-linux.sh')) {
+    if (Test-Path (Join-Path $Script:UsbRoot 'bin\claude-linux')) {
+        Write-Host '电脑还能进 Linux 时: 打开终端，cd 到U盘目录运行 bash repair-on-linux.sh，即可在 Linux 内在线维修/办公（免安装直跑，无需重启）'
+    } else {
+        Write-Host '电脑还能进 Linux 时: 打开终端，cd 到U盘目录运行 bash repair-on-linux.sh（首次将在线下载 Linux 版 claude）'
+    }
 }
 if ($DebianIsoLocal -and (Test-Path (Join-Path $Script:UsbRoot ('ISO\' + $DebianName)))) {
     Write-Host '已附带 Debian 12 netinst: U盘 启动菜单选择「安装 Debian 12」即可装 Linux'

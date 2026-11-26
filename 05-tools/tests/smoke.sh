@@ -9,6 +9,21 @@ BIN="build/live/usr/local/bin"
 PASS=0; FAIL=0
 ok()   { echo "  ✓ $1"; PASS=$((PASS+1)); }
 bad()  { echo "  ✗ $1"; FAIL=$((FAIL+1)); }
+# 断言逐文件生效：grep 多文件时命中任一即返回 0，「双侧/三端齐备」类检查会单侧放行（1.7.3 审计）
+require_each() {  # $1=计分变量名 $2=BRE 模式 $3=失败文案，其余=相对 $MAKER 的文件
+  local __s="$1" __pat="$2" __msg="$3"; shift 3
+  local __f
+  for __f in "$@"; do
+    if ! grep -q "$__pat" "$MAKER/$__f"; then
+      eval "$__s=0"
+      bad "$__f $__msg"
+    fi
+  done
+}
+
+# 否定型正则断言依赖 GNU grep（ugrep 对组内 ^ 交替整体失配 → 静默恒真，2026-11-25 实证）
+grep --version 2>/dev/null | head -n1 | grep -q 'GNU grep' \
+  || { echo "✗ 需要 GNU grep 运行本冒烟（ugrep 等会让否定型正则检查静默失效）"; exit 1; }
 
 echo "=== 冒烟测试 1/4：--help 全量可运行 ==="
 for f in "$BIN"/*.sh; do
@@ -247,13 +262,22 @@ grep -q 'npm_config_cache' "$MAKER/repair-on-windows.ps1" || { S73=0; bad "启�
 grep -q 'api\.tokeneff\.com' "$MAKER/repair-on-windows.ps1" "$MAKER/usb-v1.0.ps1" "$MAKER/usb-v1.0.sh" && { S73=0; bad "出现不存在的 api.tokeneff.com"; }
 [[ $S73 -eq 1 ]] && ok "启动器 0.5.6：OpenClaw/Pi 入口 + Node 直启 + 零残留 env"
 
-# 检查 7-4：制作器版本 1.7.1（四处全改：ps1 头注释+常量、sh 头注释+常量）
+# 检查 7-4：制作器版本 1.7.5（四处全改：ps1 头注释+常量、sh 头注释+常量）
 S74=1
 # 不用 ^ 锚定：ps1 必须带 UTF-8 BOM（PS 5.1 zh-CN 无 BOM 按 GBK 解析必炸，e888564 教训），BOM 在行首
-grep -q "usb-v1.0.ps1 版本: 1.7.1" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 头注释版本未升 1.7.1"; }
-grep -q "ScriptVersion   = '1.7.1'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 常量版本未升 1.7.1"; }
-grep -q "^# usb-v1.0.sh 版本: 1.7.1" "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 头注释版本未升 1.7.1"; }
-grep -q 'SCRIPT_VERSION="1.7.1"' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 常量版本未升 1.7.1"; }
+grep -q "usb-v1.0.ps1 版本: 1.7.5" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 头注释版本未升 1.7.5"; }
+grep -q "ScriptVersion   = '1.7.5'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 常量版本未升 1.7.5"; }
+grep -q "^# usb-v1.0.sh 版本: 1.7.5" "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 头注释版本未升 1.7.5"; }
+grep -q 'SCRIPT_VERSION="1.7.5"' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 常量版本未升 1.7.5"; }
+# 首页页头版本章必须与 sh 常量一致（派生钉：改版本忘改首页会在这里报错）
+__iv=$(grep -oE 'SCRIPT_VERSION="[0-9.]+"' "$MAKER/usb-v1.0.sh" | head -n1 | grep -oE '[0-9.]+')
+grep -q "制作器 v${__iv}" "$MAKER/index.html" || { S74=0; bad "首页页头未标注「制作器 v${__iv}」"; }
+# 1.7.3：双侧 ps1 文件本体 BOM 存在性断言（无 BOM = PS5.1 GBK 解析必炸）+ ventoy.json 无 BOM 写入
+for __p in usb-v1.0.ps1 repair-on-windows.ps1; do
+  [ "$(head -c 3 "$MAKER/$__p" | od -An -tx1 | tr -d ' \n')" = "efbbbf" ] || { S74=0; bad "$__p 缺 UTF-8 BOM"; }
+done
+grep -q 'WriteAllText.*ventoy.json' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 ventoy.json 未走无 BOM WriteAllText"; }
+grep -qE '^[[:space:]]*Set-Content.*ventoy\.json' "$MAKER/usb-v1.0.ps1" && { S74=0; bad "ps1 ventoy.json 仍是 Set-Content（PS5.1 必带 BOM）"; }
 # 1.7.0 升级提速锚：①Ventoy 版本标记跳刷 ②盘中同名镜像 sha 一致跳重写（双侧对齐）
 grep -q 'dest_same_as_release' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 缺 ISO 跳拷（dest_same_as_release）"; }
 grep -q 'VENTOY_SKIP' "$MAKER/usb-v1.0.sh" || { S74=0; bad "sh 缺 Ventoy 跳刷（VENTOY_SKIP）"; }
@@ -264,22 +288,29 @@ grep -q "ventoy_version" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 缺 ventoy_v
 # 1.3.5 遗留：codex 拷后改名 codex.exe（robocopy 保留源文件名，不改名最终校验 bin\codex.exe 必炸）
 grep -q "Copy-FileWithProgress \$codexSrc (Join-Path \$Script:UsbRoot 'bin') 'codex.exe'" "$MAKER/usb-v1.0.ps1" \
   || { S74=0; bad "ps1 codex 落盘未改名 codex.exe"; }
+# 1.7.2 双侧对称投放锚：ps1 必须写 maker_version、投放 repair-on-linux.sh（此前仅 sh 侧有，Windows 盘缺）
+grep -q "UsbRoot 'maker_version'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 缺 maker_version 写入（Windows 盘激活上报无归因）"; }
+grep -q "repair-on-linux.sh'" "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 入口循环缺 repair-on-linux.sh 投放（Windows 盘在 Linux 机无在线维修入口）"; }
 # 三振/降级语义锚：降级分支（确定性失败）保留 Write-Warn + installedFinal = $false，不得被三振 Die 吞掉
 grep -q 'Write-Warn "OpenClaw 落盘失败' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 OpenClaw 降级分支（Write-Warn）缺失"; }
 grep -q 'openclawInstalledFinal = \$false' "$MAKER/usb-v1.0.ps1" || { S74=0; bad "ps1 installedFinal = \$false 降级语义缺失"; }
-[[ $S74 -eq 1 ]] && ok "两制作器版本 1.7.1（四处）+ 升级提速锚（ISO 跳拷/Ventoy 跳刷）+ codex 改名 + 降级语义锚"
+[[ $S74 -eq 1 ]] && ok "两制作器版本 1.7.5（四处）+ BOM 断言 + ventoy.json 无 BOM 写入 + 双侧对称投放锚（maker_version/repair-on-linux）+ 升级提速锚 + codex 改名 + 降级语义锚"
 
-# 检查 7-4a：1.7.1 便携运行时同版本跳拷（bin/*.ver 标记双侧互认 + ver_skip 四分支单测）
+# 检查 7-4a：便携运行时同版本跳拷（1.7.1 四件套 + 1.7.4 补漏 Node/OpenClaw/Pi；
+# bin/*.ver 标记双侧互认 + ver_skip 四分支单测。每标记须 ≥2 处锚（跳过判定+落标写入），
+# 只写一半的半残实现会被打回）
 S74A=1
 grep -q 'ver_skip()' "$MAKER/usb-v1.0.sh" || { S74A=0; bad "sh 缺 ver_skip()"; }
 grep -q 'ver_mark()' "$MAKER/usb-v1.0.sh" || { S74A=0; bad "sh 缺 ver_mark()"; }
-for __m in claude-win claude-linux portablegit codex; do
-  grep -q "bin/$__m.ver" "$MAKER/usb-v1.0.sh" || { S74A=0; bad "sh 缺 bin/$__m.ver 标记"; }
+for __m in claude-win claude-linux portablegit codex node openclaw pi; do
+  __c=$(grep -c "bin/$__m.ver" "$MAKER/usb-v1.0.sh")
+  [ "$__c" -ge 2 ] || { S74A=0; bad "sh bin/$__m.ver 锚不足2处（跳过+落标）：实际 $__c"; }
 done
 grep -q 'Test-RuntimeVerSkip' "$MAKER/usb-v1.0.ps1" || { S74A=0; bad "ps1 缺 Test-RuntimeVerSkip"; }
 grep -q 'Write-RuntimeVerMarker' "$MAKER/usb-v1.0.ps1" || { S74A=0; bad "ps1 缺 Write-RuntimeVerMarker"; }
-for __m in claude-win portablegit codex; do
-  grep -q 'bin\\'"$__m"'.ver' "$MAKER/usb-v1.0.ps1" || { S74A=0; bad "ps1 缺 bin\\$__m.ver 标记"; }
+for __m in claude-win portablegit codex node openclaw pi; do
+  __c=$(grep -c 'bin\\'"$__m"'.ver' "$MAKER/usb-v1.0.ps1")
+  [ "$__c" -ge 2 ] || { S74A=0; bad "ps1 bin\\$__m.ver 锚不足2处（跳过+落标）：实际 $__c"; }
 done
 __vt=$(mktemp -d); mkdir -p "$__vt/bin"
 sed -n '/^ver_skip()/,/^}/p' "$MAKER/usb-v1.0.sh" > "$__vt/fn.sh"
@@ -291,7 +322,7 @@ MNT="$__vt" UPGRADE_MODE=1 ver_skip bin/x.ver 2.0 bin/x && { S74A=0; bad "ver_sk
 rm -f "$__vt/bin/x"
 MNT="$__vt" UPGRADE_MODE=1 ver_skip bin/x.ver 1.0 bin/x && { S74A=0; bad "ver_skip：抽查文件缺失不应跳"; }
 rm -rf "$__vt"
-[[ $S74A -eq 1 ]] && ok "1.7.1 便携运行时跳拷（bin/*.ver 双侧标记锚 + ver_skip 四分支单测）"
+[[ $S74A -eq 1 ]] && ok "便携运行时跳拷（bin/*.ver 双侧 7+6 标记锚各≥2处 + ver_skip 四分支单测；1.7.4 补 Node/OpenClaw/Pi）"
 
 # 检查 7-4b：环境自审（1.5.0 / 启动器 0.2.0）——贴错命令/装错场景自动纠偏三端齐备
 S74B=1
@@ -300,11 +331,26 @@ grep -q 'AI_REPAIR_AUDIT_ROOTS' "$MAKER/repair-on-linux.sh" || { S74B=0; bad "�
 grep -q 'usb-v1.0.sh | sudo bash' "$MAKER/repair-on-linux.sh" || { S74B=0; bad "启动器自审未指路制作命令"; }
 grep -q 'AI_REPAIR_LIVE_MARKER' "$MAKER/usb-v1.0.sh" || { S74B=0; bad "制作器 sh 缺 Live 环境拦截"; }
 grep -q 'AI 维修 Live 系统' "$MAKER/usb-v1.0.sh" || { S74B=0; bad "制作器 sh 缺 Live 拦截文案"; }
-grep -q '检测到已制作的本项目U盘' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74B=0; bad "制作器缺成品U盘在场确认"; }
+require_each S74B '检测到已制作的本项目U盘' "缺成品U盘在场确认" usb-v1.0.sh usb-v1.0.ps1
 grep -q 'repair-on-windows.bat' "$MAKER/usb-v1.0.ps1" || { S74B=0; bad "ps1 自审未指路修电脑入口"; }
-# curl|bash 吞脚本行修复：sh 两文件交互 read 全量走 ask()，不得残留裸 read -rp/-rsp
-grep -qE '(^|[^a-z])read -r(s)?p ' "$MAKER/usb-v1.0.sh" "$MAKER/repair-on-linux.sh" && { S74B=0; bad "仍有裸交互 read（curl|bash 会吞脚本行）"; }
-grep -q 'AI_REPAIR_ASK_STDIN' "$MAKER/usb-v1.0.sh" "$MAKER/repair-on-linux.sh" || { S74B=0; bad "ask() 缺测试回落开关"; }
+# curl|bash 吞脚本行（1.7.3 补漏）：① 提示型 read 任意 flag 组合（旧正则只抓 -rp/-rsp，
+# 漏 read -p / read -sp / read -r -p）；② 无输入来源的裸 read（同行无 < 重定向、无 | 管道、
+# 非 while 循环头——循环头来源常写在 done 行——非 builtin read；整行注释豁免）
+if grep -qE '(^|[^a-zA-Z])read( +-[a-zA-Z]+)* +-p ' "$MAKER/usb-v1.0.sh" "$MAKER/repair-on-linux.sh"; then
+  S74B=0; bad "仍有提示型 read（curl|bash 会吞脚本行）"
+fi
+__sus=""
+for __f in "$MAKER/usb-v1.0.sh" "$MAKER/repair-on-linux.sh"; do
+  while IFS=: read -r __ln __rest; do
+    case "$__rest" in
+      *builtin\ read*|*'<'*|*'|'*|*while\ *read*) continue ;;
+    esac
+    __sus="$__sus
+  $__f:$__ln: $__rest"
+  done < <(grep -nE '(^|[^_a-zA-Z])read( |$)' "$__f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+done
+if [ -n "$__sus" ]; then S74B=0; bad "存在无输入来源的裸 read：$__sus"; fi
+require_each S74B 'AI_REPAIR_ASK_STDIN' "ask() 缺测试回落开关" usb-v1.0.sh repair-on-linux.sh
 [[ $S74B -eq 1 ]] && ok "三端环境自审 + ask() tty 绑定（curl|bash 免吞行）"
 
 # 检查 7-4c：升级直达（1.6.0）——检测到成品U盘三选一默认「无损升级」，升级模式跳过制盘问答
@@ -317,18 +363,18 @@ grep -q '\$upgradeMode = \$true' "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "ps1 缺
 grep -q 'findmnt -no SOURCE' "$MAKER/usb-v1.0.sh" || { S74C=0; bad "sh 缺升级目标定位（findmnt）"; }
 grep -q 'Get-Partition -DriveLetter' "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "ps1 缺升级目标定位（Get-Partition）"; }
 # 升级确认：绿色无损横幅替换红色毁盘 YES
-grep -q '回车开始升级' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "缺升级模式绿色确认（回车开始升级）"; }
+require_each S74C '回车开始升级' "缺升级模式绿色确认（回车开始升级）" usb-v1.0.sh usb-v1.0.ps1
 # 勾选沿用盘上现状（升级不重问组件勾选）
-grep -q '升级沿用盘上勾选' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "缺「升级沿用盘上勾选」分流"; }
+require_each S74C '升级沿用盘上勾选' "缺「升级沿用盘上勾选」分流" usb-v1.0.sh usb-v1.0.ps1
 # settings.conf 存在即保留（现场配置不覆盖）
 grep -q '保留现有 config/settings.conf' "$MAKER/usb-v1.0.sh" || { S74C=0; bad "sh 缺 settings.conf 保留守卫"; }
 grep -q '保留现有 config.settings.conf' "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "ps1 缺 settings.conf 保留守卫"; }
 # 升级清理旧版 Live ISO（避免盘上堆积 1.4GB 旧包）
-grep -q 'AI-Repair-Live-v\*.iso' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "缺旧版 Live ISO 清理"; }
+require_each S74C 'AI-Repair-Live-v\*.iso' "缺旧版 Live ISO 清理" usb-v1.0.sh usb-v1.0.ps1
 # 升级完成横幅
-grep -q '无损升级完成' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "缺「无损升级完成」横幅"; }
+require_each S74C '无损升级完成' "缺「无损升级完成」横幅" usb-v1.0.sh usb-v1.0.ps1
 # 出错可退出指路（选项 3 修电脑指路保留）
-grep -q '我其实是想修电脑' "$MAKER/usb-v1.0.sh" "$MAKER/usb-v1.0.ps1" || { S74C=0; bad "三选一缺「退出修电脑」指路项"; }
+require_each S74C '我其实是想修电脑' "三选一缺「退出修电脑」指路项" usb-v1.0.sh usb-v1.0.ps1
 [[ $S74C -eq 1 ]] && ok "升级直达：三选一默认无损升级 + 选盘/勾选/确认分流 + settings.conf 守卫 + 旧 ISO 清理"
 
 # 检查 7-5：解压进度心跳 + exFAT 容错（1.3.2）
@@ -391,6 +437,120 @@ grep -q 'assert_tree_synced' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 缺三对�
 grep -q 'agents.json.tmp' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh agents.json 未原子写"; }
 grep -q '\.ai-repair-maker-session' "$MAKER/usb-v1.0.sh" || { S76=0; bad "sh 缺 nonce 标识文件"; }
 [[ $S76 -eq 1 ]] && ok "1.3.7 掉盘鲁棒性：缓存保留+两段式+恢复+对账+原子写（双侧）"
+
+# 检查 7-7：install-automount.sh 1.0.1（ROOT 测试钩子执行级覆盖——生成物可查、mount-only 可证）
+S77=1
+AM="$MAKER/install-automount.sh"
+if [ ! -f "$AM" ]; then
+  S77=0; bad "install-automount.sh 缺失"
+else
+  grep -q '仅自动挂载，不执行盘上任何脚本' "$AM" || { S77=0; bad "automount 缺 mount-only 契约声明"; }
+  grep -q 'v1.0.1' "$AM" || { S77=0; bad "automount 版本未升 1.0.1"; }
+  if ROOT="$MOCK/amroot" bash "$AM" >/dev/null 2>&1; then
+    GEN="$MOCK/amroot/usr/local/sbin/ai-usb-automount"
+    [ -f "$GEN" ] || { S77=0; bad "automount 生成物 ai-usb-automount 缺失"; }
+    [ -f "$MOCK/amroot/etc/udev/rules.d/99-ai-usb-automount.rules" ] || { S77=0; bad "automount udev 规则缺失"; }
+    grep -q 'ExecStart=/usr/local/sbin/ai-usb-automount' "$MOCK/amroot/etc/systemd/system/ai-usb-automount.service" \
+      || { S77=0; bad "automount 服务未指向固定路径（禁止指向盘上）"; }
+    if [ -f "$GEN" ]; then
+      sh -n "$GEN" || { S77=0; bad "automount 生成脚本语法错误"; }
+      grep -q 'umask=022' "$GEN" || { S77=0; bad "automount 挂载缺 umask=022"; }
+      grep -q 'umask=000' "$GEN" && { S77=0; bad "automount 仍用 umask=000（世界可写回潮）"; }
+      grep -q 'nosuid' "$GEN" || { S77=0; bad "automount 缺 nosuid"; }
+      grep -q 'nodev' "$GEN" || { S77=0; bad "automount 缺 nodev"; }
+      # mount-only 实证：生成脚本内不得出现任何从盘上执行代码的模式
+      if grep -qE '(^|[^A-Za-z.])(bash|sh|dash|source|exec)[[:space:]]|^[[:space:]]*\.[[:space:]]' "$GEN"; then
+        S77=0; bad "automount 生成脚本出现解释器/exec/source 调用（破坏 mount-only 契约）"
+      fi
+    fi
+  else
+    S77=0; bad "automount ROOT 测试钩子执行失败"
+  fi
+fi
+[[ $S77 -eq 1 ]] && ok "install-automount 1.0.1：umask=022 + nosuid/nodev + mount-only 执行级实证"
+
+echo "=== 冒烟测试 6/8：1.7.3 pipefail 执行级回归（抽真实代码行在 set -euo pipefail 下运行） ==="
+# 用例① SESSION_NONCE：旧写法 tr<urandom|head 半路退 → SIGPIPE 141 → errexit 必死；新写法有界输入
+NONCE_LINE=$(grep -m1 'SESSION_NONCE="$(head -c 4096' "$MAKER/usb-v1.0.sh" || true)
+if [ -z "$NONCE_LINE" ]; then
+  bad "pipefail① 未找到 SESSION_NONCE 新写法（旧 SIGPIPE 写法回归？）"
+else
+  { echo 'set -euo pipefail'
+    echo 'i=0; while [ "$i" -lt 20 ]; do'
+    printf '%s\n' "$NONCE_LINE"
+    echo '  [ "${#SESSION_NONCE}" -eq 32 ] || exit 1'
+    echo '  i=$((i+1))'
+    echo 'done'
+  } > "$MOCK/pf-nonce.sh"
+  if bash "$MOCK/pf-nonce.sh" >/dev/null 2>&1; then
+    ok "pipefail① SESSION_NONCE 有界输入 20 轮全过"
+  else
+    bad "pipefail① SESSION_NONCE 行在 pipefail 下仍会打死脚本"
+  fi
+fi
+if grep -qF "tr -dc 'a-f0-9' < /dev/urandom | head" "$MAKER/usb-v1.0.sh"; then
+  bad "pipefail① 静态：旧 SIGPIPE 写法死灰复燃"
+else
+  ok "pipefail① 静态：旧 SIGPIPE 写法已根除"
+fi
+# 用例② umount 卸载循环：零挂载（grep 退 1）与 umount 必失败两态都不得打死脚本
+UM_LINE=$(grep -m 1 -F 'while read -r mp; do umount "$mp" || true; done || true' "$MAKER/usb-v1.0.sh" || true)
+if [ -z "$UM_LINE" ]; then
+  bad "pipefail② 未找到 umount 兜底行"
+else
+  { echo 'set -euo pipefail'
+    echo 'TARGET_DEV=/dev/nope'
+    echo 'lsblk() { :; }'
+    printf '%s\n' "$UM_LINE"
+    echo 'lsblk() { echo /mnt/busy; }'
+    echo 'umount() { return 1; }'
+    printf '%s\n' "$UM_LINE"
+    echo 'exit 0'
+  } > "$MOCK/pf-umount.sh"
+  if bash "$MOCK/pf-umount.sh" >/dev/null 2>&1; then
+    ok "pipefail② umount 行：零挂载 + umount 必失败两态均存活"
+  else
+    bad "pipefail② umount 行在 pipefail 下仍会打死脚本"
+  fi
+fi
+# 用例③ 进度 PCT 解析：无日志 / 有进度 / 无百分比三态，均不得被打死且取值正确
+PCT_LINE=$(grep -m 1 -F 'PCT=$(grep -o' "$MAKER/usb-v1.0.sh" || true)
+if [ -z "$PCT_LINE" ]; then
+  bad "pipefail③ 未找到 PCT 进度解析行"
+else
+  cat > "$MOCK/pf-pct.sh" <<PFEOF
+set -euo pipefail
+WORKDIR="$MOCK/pfwd"
+mkdir -p "\$WORKDIR"
+$PCT_LINE
+[ "\$PCT" = "0" ] || { echo "空日志 PCT=\$PCT" >&2; exit 1; }
+printf '12%%\n45%%\n' > "\$WORKDIR/ventoy-cli.log"
+$PCT_LINE
+[ "\$PCT" = "45" ] || { echo "双行 PCT=\$PCT" >&2; exit 1; }
+printf 'starting...\n' > "\$WORKDIR/ventoy-cli.log"
+$PCT_LINE
+[ "\$PCT" = "0" ] || { echo "无百分比 PCT=\$PCT" >&2; exit 1; }
+PFEOF
+  if bash "$MOCK/pf-pct.sh" >/dev/null 2>&1; then
+    ok "pipefail③ PCT 解析：三态均存活且取值正确"
+  else
+    bad "pipefail③ PCT 行在 pipefail 下仍会打死脚本（或取值错）"
+  fi
+fi
+
+# 检查 7-8：1.7.5 审计修复锚（防误清守卫双侧同文案、fetch_verified 自愈封装、
+# CLAUDE_OK 挂盘上复核、CODEX_CURRENT 终验门控、同盘 ai-part 暂存双侧）
+S78=1
+require_each S78 '不是本项目成品U盘（可能只是拷入了入口脚本）' "缺防误清守卫文案" usb-v1.0.sh usb-v1.0.ps1
+grep -q 'fetch_verified()' "$MAKER/usb-v1.0.sh" || { S78=0; bad "sh 缺 fetch_verified()"; }
+grep -q 'sha_check_soft()' "$MAKER/usb-v1.0.sh" || { S78=0; bad "sh 缺 sha_check_soft()"; }
+__c=$(grep -c 'fetch_verified ' "$MAKER/usb-v1.0.sh")
+[ "$__c" -ge 8 ] || { S78=0; bad "sh fetch_verified 调用点不足8：实际 $__c"; }
+grep -q 'CLAUDE_OK' "$MAKER/usb-v1.0.sh" || { S78=0; bad "sh 缺 CLAUDE_OK 盘上复核标志"; }
+grep -q 'CODEX_CURRENT' "$MAKER/usb-v1.0.sh" || { S78=0; bad "sh 缺 CODEX_CURRENT 终验门控"; }
+grep -q 'ai-part' "$MAKER/usb-v1.0.sh" || { S78=0; bad "sh 缺同盘 ai-part 暂存"; }
+grep -q 'ai-part' "$MAKER/usb-v1.0.ps1" || { S78=0; bad "ps1 缺同盘 ai-part 暂存"; }
+[[ $S78 -eq 1 ]] && ok "1.7.5 审计修复（防误清守卫双侧 + fetch_verified×8 自愈 + CLAUDE_OK/CODEX_CURRENT + ai-part 暂存双侧）"
 
 echo
 echo "=== 结果：通过 $PASS 项 / 失败 $FAIL 项 ==="

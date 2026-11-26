@@ -195,3 +195,6 @@ pre#log {
 /* v0.3.1：自助区链接形态的按钮（去官网登录） */
 a.btn { display: inline-block; text-align: center; margin-top: 14px; }
 a.btn:hover { text-decoration: none; }
+
+/* v0.3.2：页头制作器版本章（版本随 usb-v1.0.sh SCRIPT_VERSION 同步，smoke 检查 7-4 钉） */
+.brand .ver { font-size: .7rem; font-weight: 600; color: var(--dim); border: 1px solid currentColor; border-radius: 999px; padding: 2px 9px; letter-spacing: .02em; }
